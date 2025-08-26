@@ -49,10 +49,12 @@ connectToDatabase();
 // 引入客戶和帳號的路由模組
 const customersRouter = require('./routes/customers')(client, schemaName);
 const accountsRouter = require('./routes/accounts')(client, schemaName);
+const loginRouter = require('./routes/login')(client, schemaName);
 
 // 將路由掛載到主應用程式上
 app.use('/api/customers', customersRouter);
 app.use('/api/accounts', accountsRouter);
+app.use('/api/login', loginRouter);
 
 // 定義一個測試用的 API 端點
 app.get('/api/status', async (req, res) => {
