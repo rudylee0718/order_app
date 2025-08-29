@@ -56,7 +56,8 @@ module.exports = (client, schemaName) => {
     }
     try {
       const query = `
-        SELECT account, description, customer_id FROM ${schemaName}.accounts WHERE account = $1;
+        SELECT a.account, a.description as accountName,b.description as customerName, a.customer_id FROM ${schemaName}.accounts as a 
+        left join ${schemaName}.customers as b on a.customer_id=b.id WHERE a.account = $1;
       `;
       const values = [account];
       const result = await client.query(query, values);
