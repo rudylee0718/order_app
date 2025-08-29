@@ -48,6 +48,30 @@ module.exports = (client, schemaName) => {
     }
   });
 
+   // 查詢單一帳號資料的 API (用於 Flutter 頁面中的自動帶入功能)
+  router.get('/', async (req, res) => {
+    const { account } = req.query;
+    if (!account) {
+      return res.status(400).json({ status: 'Error', message: '缺少帳號參數' });
+    }
+    try {
+      const query = `
+        SELECT account, description, customer_id FROM ${schemaName}.accounts WHERE account = $1;
+      `;
+      const values = [account];
+      const result = await client.query(query, values);
+      if (result.rows.length > 0) {
+        res.status(200).json({ status: 'Success', message: '帳號查詢成功', data: result.rows[0] });
+      } else {
+        res.status(404).json({ status: 'Error', message: '帳號不存在' });
+      }
+    } catch (err) {
+      console.error('帳號查詢失敗：', err.stack);
+      res.status(500).json({ status: 'Error', message: '帳號查詢失敗' });
+    }
+  });
+
+
   // 返回 router 物件
   return router;
 };
