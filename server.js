@@ -2,6 +2,7 @@
 
 // 引入所需的模組
 const express = require('express');
+const cors = require('cors'); // 引入 cors 套件
 const { Client } = require('pg');
 const dotenv = require('dotenv');
 
@@ -11,6 +12,8 @@ dotenv.config();
 // 建立 Express 應用程式
 const app = express();
 const port = process.env.PORT || 3000;
+// 啟用 CORS，允許所有來源的請求
+app.use(cors());
 
 // 啟用 Express 內建的 body-parser，用來解析 JSON 請求
 app.use(express.json());
