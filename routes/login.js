@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 
 // 這裡我們需要一個工廠函式來接收資料庫客戶端和 schema 名稱
-module.exports = (client, schemaName) => {
+module.exports = (pool, schemaName) => {
 
   // 處理登入驗證的 API
   router.post('/', async (req, res) => {
@@ -19,7 +19,7 @@ module.exports = (client, schemaName) => {
         SELECT * FROM ${schemaName}.accounts WHERE account = $1 AND password = $2;
       `;
       const values = [account, password];
-      const result = await client.query(query, values);
+      const result = await pool.query(query, values);
 
       if (result.rows.length > 0) {
         res.status(200).json({ status: 'Success', message: '登入成功', data: result.rows[0] });

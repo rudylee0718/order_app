@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 
 // 這裡我們需要一個工廠函式來接收資料庫客戶端和 schema 名稱
-module.exports = (client, schemaName) => {
+module.exports = (pool, schemaName) => {
 
   // 新增帳號資料的 API
   router.post('/', async (req, res) => {
@@ -20,7 +20,7 @@ module.exports = (client, schemaName) => {
       const customerCheckQuery = `
         SELECT id FROM ${schemaName}.customers WHERE id = $1;
       `;
-      const customerCheckResult = await client.query(customerCheckQuery, [customer_id]);
+      const customerCheckResult = await pool.query(customerCheckQuery, [customer_id]);
       
       if (customerCheckResult.rows.length === 0) {
         return res.status(404).json({ status: 'Error', message: '提供的客戶ID不存在' });
@@ -34,7 +34,7 @@ module.exports = (client, schemaName) => {
       `;
       const values = [account, password, description, customer_id];
       
-      const result = await client.query(query, values);
+      const result = await pool.query(query, values);
       
       if (result.rows.length > 0) {
         res.status(201).json({ status: 'Success', message: '帳號資料已成功新增', data: result.rows[0] });
@@ -60,7 +60,7 @@ module.exports = (client, schemaName) => {
         left join ${schemaName}.customers as b on a.customer_id=b.id WHERE a.account = $1;
       `;
       const values = [account];
-      const result = await client.query(query, values);
+      const result = await pool.query(query, values);
       if (result.rows.length > 0) {
         res.status(200).json({ status: 'Success', message: '帳號查詢成功', data: result.rows[0] });
       } else {

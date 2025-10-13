@@ -4,7 +4,7 @@ const express = require('express');
 const router = express.Router();
 
 // 這裡我們需要一個工廠函式來接收資料庫客戶端和 schema 名稱
-module.exports = (client, schemaName) => {
+module.exports = (pool, schemaName) => {
 
   // 新增客戶資料的 API
   router.post('/', async (req, res) => {
@@ -24,7 +24,7 @@ module.exports = (client, schemaName) => {
       `;
       const values = [id, description, tel, address];
       
-      const result = await client.query(query, values);
+      const result = await pool.query(query, values);
 
       if (result.rows.length > 0) {
         res.status(201).json({ status: 'Success', message: '客戶資料已成功新增', data: result.rows[0] });

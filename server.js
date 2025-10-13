@@ -3,7 +3,7 @@
 // 引入所需的模組
 const express = require('express');
 const cors = require('cors'); // 引入 cors 套件
-const { Client } = require('pg');
+const { Pool  } = require('pg');
 const dotenv = require('dotenv');
 
 // 加載 .env 檔案中的環境變數
@@ -19,7 +19,7 @@ app.use(cors());
 app.use(express.json());
 
 // PostgreSQL 連線設定，從環境變數中讀取
-const client = new Client({
+const pool = new Pool ({
   user: process.env.DB_USER,
   host: process.env.DB_HOST,
   database: process.env.DB_DATABASE,
@@ -39,7 +39,7 @@ const schemaName = 'app_order';
  */
 async function connectToDatabase() {
   try {
-    await client.connect();
+    await pool.connect();
     console.log('成功連接到 PostgreSQL 資料庫！');
   } catch (err) {
     console.error('資料庫連線失敗：', err.stack);
@@ -50,19 +50,23 @@ async function connectToDatabase() {
 connectToDatabase();
 
 // 引入客戶和帳號的路由模組
-const customersRouter = require('./routes/customers')(client, schemaName);
-const accountsRouter = require('./routes/accounts')(client, schemaName);
-const loginRouter = require('./routes/login')(client, schemaName);
+const customersRouter = require('./routes/customers')(pool, schemaName);
+const accountsRouter = require('./routes/accounts')(pool, schemaName);
+const loginRouter = require('./routes/login')(pool, schemaName);
+const loadUi=require('./routes/load_ui')(pool, schemaName);
 
 // 將路由掛載到主應用程式上
 app.use('/api/customers', customersRouter);
 app.use('/api/accounts', accountsRouter);
 app.use('/api/login', loginRouter);
+app.use('/api', loadUi);
+
+
 
 // 定義一個測試用的 API 端點
 app.get('/api/status', async (req, res) => {
   try {
-    const result = await client.query('SELECT NOW()');
+    const result = await pool.query('SELECT NOW()');
     res.json({
       status: 'OK',
       message: '後端伺服器運行正常，並已連接到資料庫。',
@@ -74,78 +78,7 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
-// // 新增客戶資料的 API
-// app.post('/api/customers', async (req, res) => {
-//   const { id, description, tel, address } = req.body;
-  
-//   // 檢查所有必需的欄位
-//   if (!id || !description) {
-//     return res.status(400).json({ status: 'Error', message: '缺少必要的欄位: id 和 description' });
-//   }
 
-//   try {
-//     const query = `
-//       INSERT INTO ${schemaName}.customers (id, description, tel, address)
-//       VALUES ($1, $2, $3, $4)
-//       ON CONFLICT (id) DO NOTHING
-//       RETURNING *;
-//     `;
-//     const values = [id, description, tel, address];
-    
-//     const result = await client.query(query, values);
-
-//     if (result.rows.length > 0) {
-//       res.status(201).json({ status: 'Success', message: '客戶資料已成功新增', data: result.rows[0] });
-//     } else {
-//       res.status(409).json({ status: 'Error', message: '客戶ID已存在，無法新增' });
-//     }
-//   } catch (err) {
-//     console.error('新增客戶資料失敗：', err.stack);
-//     res.status(500).json({ status: 'Error', message: '新增客戶資料失敗' });
-//   }
-// });
-
-// // 新增帳號資料的 API
-// app.post('/api/accounts', async (req, res) => {
-//   const { account, password, description, customer_id } = req.body;
-
-//   // 檢查所有必需的欄位
-//   if (!account || !password || !customer_id) {
-//     return res.status(400).json({ status: 'Error', message: '缺少必要的欄位: account, password 和 customer_id' });
-//   }
-  
-//   try {
-//     // 檢查 customer_id 是否存在於客戶資料表中
-//     const customerCheckQuery = `
-//       SELECT id FROM ${schemaName}.customers WHERE id = $1;
-//     `;
-//     const customerCheckResult = await client.query(customerCheckQuery, [customer_id]);
-    
-//     if (customerCheckResult.rows.length === 0) {
-//       return res.status(404).json({ status: 'Error', message: '提供的客戶ID不存在' });
-//     }
-
-//     const query = `
-//       INSERT INTO ${schemaName}.accounts (account, password, description, customer_id)
-//       VALUES ($1, $2, $3, $4)
-//       ON CONFLICT (account) DO NOTHING
-//       RETURNING *;
-//     `;
-//     const values = [account, password, description, customer_id];
-    
-//     const result = await client.query(query, values);
-    
-//     if (result.rows.length > 0) {
-//       res.status(201).json({ status: 'Success', message: '帳號資料已成功新增', data: result.rows[0] });
-//     } else {
-//       res.status(409).json({ status: 'Error', message: '帳號名稱已存在，無法新增' });
-//     }
-
-//   } catch (err) {
-//     console.error('新增帳號資料失敗：', err.stack);
-//     res.status(500).json({ status: 'Error', message: '新增帳號資料失敗' });
-//   }
-// });
 
 // 啟動伺服器
 app.listen(port, () => {
