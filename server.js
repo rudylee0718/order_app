@@ -54,13 +54,14 @@ const customersRouter = require('./routes/customers')(pool, schemaName);
 const accountsRouter = require('./routes/accounts')(pool, schemaName);
 const loginRouter = require('./routes/login')(pool, schemaName);
 const loadUi=require('./routes/load_ui')(pool, schemaName);
+const ordersRouter=require('./routes/orders')(pool, schemaName);
 
 // 將路由掛載到主應用程式上
 app.use('/api/customers', customersRouter);
 app.use('/api/accounts', accountsRouter);
 app.use('/api/login', loginRouter);
 app.use('/api', loadUi);
-
+app.use('/api', ordersRouter);
 
 
 // 定義一個測試用的 API 端點
