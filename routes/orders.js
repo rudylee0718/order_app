@@ -5,7 +5,7 @@ const router = express.Router();
 // 定義 testapi.process_record 的所有欄位名稱，用於 POST API
 // 這是為了確保插入時的欄位順序與資料表結構完全匹配
 const PROCESS_RECORD_COLUMNS = [
-    'uid', 'cust_id', 'qo_no', 'qo_date', 'ship_date', 'set_location', 'window_no', 'color_no', 'product', 'fabric', 
+    'uid', 'cust_id', 'qono', 'qo_date', 'ship_date', 'set_location', 'window_no', 'color_no', 'product', 'fabric', 
     'process', 'width', 'height', 'sewing_add', 'open_style', 'process_times', 'joining_fabric', 'symm_pattern', 
     'petal_qty', 'v_petal_length', 'h_petal_length', 'frames', 'least_qty', 'cutain_hem', 'label', 'band_type', 
     'iron', 'neck_style', 'sketch', 'hook_type', 'head_style', 'last_qty', 'urgent', 'pcs', 'qty_che', 'qty_yd', 
@@ -49,7 +49,7 @@ router.post('/add-record', async (req, res) => {
         res.status(201).json({ 
             message: '紀錄成功新增', 
             // 返回關鍵識別資訊，方便前端確認
-            qo_no: recordData.qo_no, 
+            qono: recordData.qono, 
             uid: recordData.uid 
         });
 
