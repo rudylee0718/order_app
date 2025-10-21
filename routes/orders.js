@@ -45,7 +45,7 @@ router.get('/qo-orders/preview-number', async (req, res) => {
 // 2. 保留 qo_no (建立草稿主檔)
 // ========================================
 router.post('/qo-orders/reserve', async (req, res) => {
-  const { custId, customerName, phone, address } = req.body;
+  const { custId, newCaseName, phone, address } = req.body;
   
   let client;
   
@@ -56,11 +56,11 @@ router.post('/qo-orders/reserve', async (req, res) => {
     // 產生 qo_no 並建立草稿主檔
     const result = await client.query(`
       INSERT INTO ${schemaName}.qo_orders 
-        (qono, cust_id, customer_name, phone, address, status)
+        (qono, cust_id, newcasename, phone, address, status)
       VALUES 
         (${schemaName}.generate_qo_order_number(), $1, $2, $3, $4, 'DRAFT')
       RETURNING *
-    `, [custId, customerName, phone, address]);
+    `, [custId, newCaseName, phone, address]);
     
     await client.query('COMMIT');
     
