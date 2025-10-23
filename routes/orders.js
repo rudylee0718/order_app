@@ -242,9 +242,10 @@ router.get('/qo-orders/:qono', async (req, res) => {
 // 5. 查詢訂單列表
 // ========================================
 router.get('/qo-orders', async (req, res) => {
-  const { page = 1, limit = 20, status, custId } = req.query;
-  const offset = (page - 1) * limit;
-  
+  const { page = 1, limit = 100, status, custId, startDate, endDate, keyword } = req.query;
+  // const { page = 1, limit = 20, status, custId } = req.query;
+  // const offset = (page - 1) * limit;
+  const offset = (parseInt(page) - 1) * parseInt(limit)
   try {
     // 建立查詢條件
     let whereClause = 'WHERE 1=1';
@@ -262,7 +263,53 @@ router.get('/qo-orders', async (req, res) => {
       params.push(custId);
       paramIndex++;
     }
+
+// 3. 日期範圍篩選 (QODATE)
+    if (startDate) {
+      // 使用 >= 起始日期
+      whereClause += ` AND o.qodate >= $${paramIndex}`;
+      params.push(startDate); // 假設 startDate 格式為 'YYYY-MM-DD'
+      paramIndex++;
+    }
     
+    if (endDate) {
+      // 使用 <= 結束日期，確保包含該日期的所有訂單
+      whereClause += ` AND o.qodate <= $${paramIndex}`;
+      params.push(endDate); // 假設 endDate 格式為 'YYYY-MM-DD'
+      paramIndex++;
+    }
+
+    // 4. 關鍵字模糊查詢 (QONO, NEWCASENAME, PHONE, ADDRESS)
+    if (keyword) {
+      const searchKeyword = `%${keyword.toLowerCase()}%`;
+      whereClause += ` AND (
+        LOWER(o.qono) LIKE $${paramIndex} OR
+        LOWER(o.newcasename) LIKE $${paramIndex} OR
+        LOWER(o.phone) LIKE $${paramIndex} OR
+        LOWER(o.address) LIKE $${paramIndex}
+      )`;
+      params.push(searchKeyword);
+      paramIndex++;
+    }    
+
+// 查詢訂單列表
+    // 注意：LIMIT 和 OFFSET 的參數索引需要調整
+    // const ordersResult = await pool.query(
+    //   `SELECT o.*, 
+    //           (SELECT COUNT(*) FROM ${schemaName}.process_record WHERE qono = o.qono) as record_count
+    //    FROM ${schemaName}.qo_orders o
+    //    ${whereClause}
+    //    ORDER BY o.created_at DESC
+    //    LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+    //   [...params, limit, offset] // 將 limit 和 offset 放在參數列表的最後
+    // );
+    
+    // // 查詢總數
+    // const countResult = await pool.query(
+    //   `SELECT COUNT(*) FROM ${schemaName}.qo_orders o ${whereClause}`,
+    //   params
+    // );    
+
     // 查詢訂單列表
     const ordersResult = await pool.query(
       `SELECT o.*, 
