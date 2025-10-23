@@ -294,23 +294,6 @@ router.get('/qo-orders', async (req, res) => {
 
 // 查詢訂單列表
     // 注意：LIMIT 和 OFFSET 的參數索引需要調整
-    // const ordersResult = await pool.query(
-    //   `SELECT o.*, 
-    //           (SELECT COUNT(*) FROM ${schemaName}.process_record WHERE qono = o.qono) as record_count
-    //    FROM ${schemaName}.qo_orders o
-    //    ${whereClause}
-    //    ORDER BY o.created_at DESC
-    //    LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
-    //   [...params, limit, offset] // 將 limit 和 offset 放在參數列表的最後
-    // );
-    
-    // // 查詢總數
-    // const countResult = await pool.query(
-    //   `SELECT COUNT(*) FROM ${schemaName}.qo_orders o ${whereClause}`,
-    //   params
-    // );    
-
-    // 查詢訂單列表
     const ordersResult = await pool.query(
       `SELECT o.*, 
               (SELECT COUNT(*) FROM ${schemaName}.process_record WHERE qono = o.qono) as record_count
@@ -318,14 +301,31 @@ router.get('/qo-orders', async (req, res) => {
        ${whereClause}
        ORDER BY o.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
-      [...params, limit, offset]
+      [...params, limit, offset] // 將 limit 和 offset 放在參數列表的最後
     );
     
     // 查詢總數
     const countResult = await pool.query(
-      `SELECT COUNT(*) FROM ${schemaName}.qo_orders ${whereClause}`,
+      `SELECT COUNT(*) FROM ${schemaName}.qo_orders o ${whereClause}`,
       params
-    );
+    );    
+
+    // // 查詢訂單列表
+    // const ordersResult = await pool.query(
+    //   `SELECT o.*, 
+    //           (SELECT COUNT(*) FROM ${schemaName}.process_record WHERE qono = o.qono) as record_count
+    //    FROM ${schemaName}.qo_orders o
+    //    ${whereClause}
+    //    ORDER BY o.created_at DESC
+    //    LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+    //   [...params, limit, offset]
+    // );
+    
+    // // 查詢總數
+    // const countResult = await pool.query(
+    //   `SELECT COUNT(*) FROM ${schemaName}.qo_orders ${whereClause}`,
+    //   params
+    // );
     
     res.json({
       success: true,
