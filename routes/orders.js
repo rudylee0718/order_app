@@ -631,6 +631,42 @@ router.delete('/qo-orders/:qono', async (req, res) => {
     if (client) client.release();
   }
 });
+// ========================================
+// 10. 取得預覽窗號 (即時計算)
+// ========================================
+router.get('/qo-orders/:qono/preview-window-no', async (req, res) => {
+  const { qono } = req.params;
+  
+  try {
+    // 方法1: 使用資料庫函數
+    const result = await pool.query(
+      `SELECT ${schemaName}.get_preview_window_no($1) as preview_window_no`,
+      [qono]
+    );
+    
+    // 方法2: 直接用 SQL 計算 (不需要函數,更直接)
+    // const result = await pool.query(
+    //   `SELECT COALESCE(MAX(window_no), 0) + 1 as preview_window_no
+    //    FROM ${schemaName}.process_record 
+    //    WHERE qono = $1`,
+    //   [qono]
+    // );
+    
+    res.json({
+      success: true,
+      qono: qono,
+      previewWindowNo: result.rows[0].preview_window_no,
+      note: '此為預覽窗號,實際窗號以儲存後為準'
+    });
+    
+  } catch (error) {
+    console.error('Error getting preview window number:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 
 // 新增 API 端點：處理新增紀錄到 testapi.process_record (POST)
 router.post('/add-record', async (req, res) => {
