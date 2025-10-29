@@ -643,15 +643,7 @@ router.get('/qo-orders/:qono/preview-window-no', async (req, res) => {
       `SELECT ${schemaName}.get_preview_window_no($1) as preview_window_no`,
       [qono]
     );
-    
-    // 方法2: 直接用 SQL 計算 (不需要函數,更直接)
-    // const result = await pool.query(
-    //   `SELECT COALESCE(MAX(window_no), 0) + 1 as preview_window_no
-    //    FROM ${schemaName}.process_record 
-    //    WHERE qono = $1`,
-    //   [qono]
-    // );
-    
+        
     res.json({
       success: true,
       qono: qono,
@@ -665,6 +657,58 @@ router.get('/qo-orders/:qono/preview-window-no', async (req, res) => {
       success: false,
       error: error.message
     });
+  }
+});
+
+// ========================================
+// 11. 查詢訂單uid明細
+// ========================================
+router.get('/qo-orders/:qono/uid-records/:uid', async (req, res) => {
+  const { qono, uid } = req.params;
+  
+  let client;
+  
+  try {
+    client = await pool.connect();
+    
+    // 查詢主檔
+    const orderResult = await client.query(
+      `SELECT * FROM ${schemaName}.qo_orders WHERE qono = $1`,
+      [qono]
+    );
+    
+    if (orderResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: '找不到該訂單'
+      });
+    }
+    
+    // 查詢明細 (依 window_no 排序)
+    const recordsResult = await client.query(
+      `SELECT * FROM ${schemaName}.process_record 
+       WHERE qono = $1 and uid=$2
+       ORDER BY window_no`,
+      [qono, uid]
+    );
+    
+    res.json({
+      success: true,
+      order: {
+        ...orderResult.rows[0],
+        records: recordsResult.rows,
+        recordCount: recordsResult.rows.length
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error getting order:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  } finally {
+    if (client) client.release();
   }
 });
 
