@@ -309,23 +309,6 @@ router.get('/qo-orders', async (req, res) => {
       `SELECT COUNT(*) FROM ${schemaName}.qo_orders o ${whereClause}`,
       params
     );    
-
-    // // 查詢訂單列表
-    // const ordersResult = await pool.query(
-    //   `SELECT o.*, 
-    //           (SELECT COUNT(*) FROM ${schemaName}.process_record WHERE qono = o.qono) as record_count
-    //    FROM ${schemaName}.qo_orders o
-    //    ${whereClause}
-    //    ORDER BY o.created_at DESC
-    //    LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
-    //   [...params, limit, offset]
-    // );
-    
-    // // 查詢總數
-    // const countResult = await pool.query(
-    //   `SELECT COUNT(*) FROM ${schemaName}.qo_orders ${whereClause}`,
-    //   params
-    // );
     
     res.json({
       success: true,
@@ -694,6 +677,44 @@ router.get('/qo-orders/:qono/records/:uid', async (req, res) => {
   } 
 });
 
+
+// ========================================
+// 11. 取得客戶預設選項
+// ========================================
+router.get('/customer-defaults/:custId/:product', async (req, res) => {
+  const { custId, product } = req.params;
+  
+  try {
+    const result = await pool.query(
+      `SELECT element_id, value 
+       FROM ${schemaName}.customer_default_options 
+       WHERE cust_id = $1 AND product = $2
+       ORDER BY element_id`,
+      [custId, product]
+    );
+    
+    // 轉換成 Map 格式,方便前端使用
+    const defaults = {};
+    result.rows.forEach(row => {
+      defaults[row.element_id] = row.value;
+    });
+    
+    res.json({
+      success: true,
+      custId: custId,
+      product: product,
+      defaults: defaults,
+      count: result.rows.length
+    });
+    
+  } catch (error) {
+    console.error('Error getting customer defaults:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 // 新增 API 端點：處理新增紀錄到 testapi.process_record (POST)
 router.post('/add-record', async (req, res) => {
     let client;
