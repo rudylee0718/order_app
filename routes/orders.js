@@ -715,6 +715,37 @@ router.get('/customer-defaults/:custId/:product', async (req, res) => {
     });
   }
 });
+
+// ========================================
+// 12. 統計草稿訂單數量
+// ========================================
+router.get('/qo-orders/draft-count/:custId', async (req, res) => {
+  const { custId } = req.params;
+  
+  try {
+    const result = await pool.query(
+      `SELECT COUNT(*) as count 
+       FROM ${schemaName}.qo_orders 
+       WHERE cust_id = $1 AND status = 'DRAFT'`,
+      [custId]
+    );
+    
+    const count = parseInt(result.rows[0].count) || 0;
+    
+    res.json({
+      success: true,
+      custId: custId,
+      draftCount: count
+    });
+    
+  } catch (error) {
+    console.error('Error getting draft count:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 // 新增 API 端點：處理新增紀錄到 testapi.process_record (POST)
 router.post('/add-record', async (req, res) => {
     let client;
