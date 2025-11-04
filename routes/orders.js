@@ -746,6 +746,85 @@ router.get('/qo-orders/draft-count/:custId', async (req, res) => {
     });
   }
 });
+
+// ========================================
+// 根據色號查詢目錄資料
+// GET /api/items/by-color/:colorNo
+// ========================================
+router.get('/items/by-color/:colorNo', async (req, res) => {
+  const { colorNo } = req.params;
+  
+  console.log(`🔍 查詢色號: ${colorNo}`);
+  
+  try {
+    // 查詢資料庫
+    const query = `
+      SELECT 
+        item_no,
+        color_no,
+        list_price,
+        unit,
+        real_width,
+        theoretical_width,
+        pattern_height,
+        class,
+        description,
+        fabric_type,
+        remark,
+        default_process
+      FROM ${schemaName}.fabric_info
+      WHERE color_no = $1
+      LIMIT 1
+    `;
+     // ✅ PostgreSQL 正確用法
+    const result = await pool.query(query, [colorNo]);
+    const rows = result.rows;
+
+    // const [rows] = await pool.query(query, [colorNo]);
+    
+    if (rows.length === 0) {
+      console.log(`⚠️ 色號不存在: ${colorNo}`);
+      return res.status(404).json({
+        success: false,
+        message: `色號 ${colorNo} 不存在於目錄中`
+      });
+    }
+    
+    const item = rows[0];
+    
+    console.log(`✅ 找到色號: ${colorNo}`, {
+      item_no: item.item_no,
+      fabric_type: item.fabric_type,
+      default_process: item.default_process
+    });
+    
+    res.json({
+      success: true,
+      item: {
+        item_no: item.item_no,
+        color_no: item.color_no,
+        list_price: item.list_price,
+        unit: item.unit,
+        real_width: item.real_width,
+        theoretical_width: item.theoretical_width,
+        pattern_height: item.pattern_height,
+        class: item.class,
+        description: item.description,
+        fabric_type: item.fabric_type,
+        remark: item.remark,
+        default_process: item.default_process
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ 查詢色號失敗:', error);
+    res.status(500).json({
+      success: false,
+      message: '查詢色號時發生錯誤',
+      error: error.message
+    });
+  }
+});
 // 新增 API 端點：處理新增紀錄到 testapi.process_record (POST)
 router.post('/add-record', async (req, res) => {
     let client;
