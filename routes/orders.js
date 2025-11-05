@@ -15,7 +15,7 @@ const PROCESS_RECORD_COLUMNS = [
     'process_unit', 'join_fabric_qty_yd', 'join_fabric_qty_che', 'ship_type', 'shipping_locate', 'erp_custid', 
     'case_name', 'shared_fabric', 'shared_group', 'roman_track', 'process_frame_qty', 'band_qty', 'make_hole', 
     'hole_qty', 'velcro', 'velcro_qty', 'special_sew', 'hidden_sew', 'mark_line', 'side_loop_fasteners', 
-    'band_with_velcro', 'band_on_side', 'iron_hole_qty', 'itemno', 'real_frame_width'
+    'band_with_velcro', 'band_on_side', 'iron_hole_qty', 'itemno', 'real_frame_width','o_width'
 ];
 
 // 這裡我們需要一個工廠函式來接收資料庫客戶端和 schema 名稱
