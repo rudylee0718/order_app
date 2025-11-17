@@ -969,6 +969,223 @@ router.post('/qo-orders/calculate-total', async (req, res) => {
   }
 });
 
+// ========================================
+// 1. 新增明細記錄時同時建立 order_detail
+// ========================================
+router.post('/qo-orders/:qono/records-with-detail', async (req, res) => {
+  const { qono } = req.params;
+  const recordData = req.body;
+  
+  let client;
+  
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    
+    // 1. 檢查主檔是否存在
+    const orderCheck = await client.query(
+      `SELECT * FROM ${schemaName}.qo_orders WHERE qono = $1`,
+      [qono]
+    );
+    
+    if (orderCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        message: '找不到該訂單'
+      });
+    }
+    
+    // 2. 取得下一個 uid
+    const uidResult = await client.query(
+      `SELECT ${schemaName}.get_next_uid($1) as next_uid`,
+      [qono]
+    );
+    const uid = uidResult.rows[0].next_uid;
+    
+    // 3. 取得 window_no
+    const windowResult = await client.query(
+      `SELECT COALESCE(MAX(window_no), 0) + 1 as next_window_no 
+       FROM ${schemaName}.process_record 
+       WHERE qono = $1`,
+      [qono]
+    );
+    const windowNo = windowResult.rows[0].next_window_no;
+    
+    // 4. 插入 process_record
+    recordData.uid = uid;
+    recordData.qono = qono;
+    recordData.window_no = windowNo;
+    
+    const values = PROCESS_RECORD_COLUMNS.map(col => 
+      recordData[col] === undefined ? null : recordData[col]
+    );
+    
+    const placeholders = PROCESS_RECORD_COLUMNS.map((_, index) => `$${index + 1}`).join(', ');
+    const columns = PROCESS_RECORD_COLUMNS.join(', ');
+    const sql = `INSERT INTO ${schemaName}.process_record (${columns}) VALUES (${placeholders}) RETURNING *`;
+    
+    const recordResult = await client.query(sql, values);
+ 
+
+    // 5. 建立 order_data JSONB
+    const orderData = {
+      cust_id: recordData.cust_id,
+      color_no: recordData.color_no,
+      qty_yd: recordData.qty_yd,
+      product: recordData.product,
+      width: recordData.width,
+      height: recordData.height,
+      frames: recordData.frames,
+      process_qty: recordData.process_qty,
+      process_times: recordData.process_times,
+      pcs: recordData.pcs,
+      fabric:recordData.fabric,
+      process:recordData.process,
+      open_style:recordData.open_style,
+      joining_fabric:recordData.joining_fabric,
+      cutain_hem:recordData.cutain_hem,
+      label:recordData.label,
+      band_type:recordData.band_type,
+      iron:recordData.iron,
+      lead:recordData.lead,
+      hook_type:recordData.hook_type,
+      neck_style:recordData.neck_style,
+      band_with_velcro:recordData.band_with_velcro,
+      urgent:recordData.urgent,
+      band_on_side:recordData.band_on_side,
+      make_hole:recordData.make_hole,
+      velcro:recordData.velcro,
+      mark_line:recordData.mark_line,
+      special_sew:recordData.special_sew,
+      side_loop_fasteners:recordData.side_loop_fasteners,
+      hidden_sew:recordData.hidden_sew,
+      
+    };
+    
+    // 6. 插入 order_detail
+    const detailResult = await client.query(
+      `SELECT ${schemaName}.insert_order_detail($1, $2, $3, $4::jsonb) as inserted_count`,
+      [qono, uid, windowNo, JSON.stringify(orderData)]
+    );
+    
+    const insertedCount = detailResult.rows[0].inserted_count;
+    
+    await client.query('COMMIT');
+    
+    res.status(201).json({
+      success: true,
+      message: '明細記錄和計價明細成功新增',
+      record: recordResult.rows[0],
+      qono: qono,
+      uid: uid,
+      window_no: windowNo,
+      detail_count: insertedCount
+    });
+    
+  } catch (error) {
+    if (client) await client.query('ROLLBACK');
+    console.error('新增明細記錄時發生錯誤:', error);
+    res.status(400).json({
+      success: false,
+      message: '新增明細記錄失敗',
+      error: error.message
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+
+// ========================================
+// 2. 查詢 order_detail
+// ========================================
+router.get('/qo-orders/:qono/order-details', async (req, res) => {
+  const { qono } = req.params;
+  const { uid } = req.query;
+  
+  try {
+    let query;
+    let params;
+    
+    if (uid) {
+      // 查詢特定 uid 的明細
+      query = `
+        SELECT * FROM ${schemaName}.order_detail 
+        WHERE qono = $1 AND uid = $2 
+        ORDER BY seq_no
+      `;
+      params = [qono, uid];
+    } else {
+      // 查詢整個訂單的所有明細
+      query = `
+        SELECT * FROM ${schemaName}.order_detail 
+        WHERE qono = $1 
+        ORDER BY uid, seq_no
+      `;
+      params = [qono];
+    }
+    
+    const result = await pool.query(query, params);
+    
+    res.json({
+      success: true,
+      qono: qono,
+      uid: uid || null,
+      details: result.rows,
+      count: result.rows.length
+    });
+    
+  } catch (error) {
+    console.error('查詢 order_detail 失敗:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// ========================================
+// 3. 查詢訂單總金額統計
+// ========================================
+router.get('/qo-orders/:qono/order-summary', async (req, res) => {
+  const { qono } = req.params;
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        qono,
+        COUNT(DISTINCT uid) as record_count,
+        COUNT(*) as detail_count,
+        SUM(origin_amount) as total_origin_amount,
+        SUM(amount) as total_amount,
+        SUM(amount) - SUM(origin_amount) as total_discount_amount
+      FROM ${schemaName}.order_detail 
+      WHERE qono = $1
+      GROUP BY qono
+    `, [qono]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: '找不到該訂單的明細'
+      });
+    }
+    
+    res.json({
+      success: true,
+      summary: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('查詢訂單摘要失敗:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
   // 返回 router 物件
   return router;
 };
