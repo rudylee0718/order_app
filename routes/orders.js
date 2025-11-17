@@ -825,53 +825,150 @@ router.get('/items/by-color/:colorNo', async (req, res) => {
     });
   }
 });
-// 新增 API 端點：處理新增紀錄到 testapi.process_record (POST)
-router.post('/add-record', async (req, res) => {
-    let client;
-    const recordData = req.body; // 獲取從 Flutter 傳來的 JSON 資料
-
-    // 1. 準備 SQL 查詢的參數陣列
-    // 按照 PROCESS_RECORD_COLUMNS 的順序，從 recordData 中提取值
-    // 如果欄位在 recordData 中不存在，則使用 null
-    const values = PROCESS_RECORD_COLUMNS.map(col => recordData[col] === undefined ? null : recordData[col]);
+// ========================================
+// 1. 計算訂單金額 (完整明細)
+// POST /api/qo-orders/calculate-pricing
+// ========================================
+router.post('/qo-orders/calculate-pricing', async (req, res) => {
+  const orderData = req.body;
+  
+  console.log('📊 開始計算訂單金額:', {
+    cust_id: orderData.cust_id,
+    color_no: orderData.color_no,
+    product: orderData.product
+  });
+  
+  let client;
+  
+  try {
+    client = await pool.connect();
     
-    // 2. 建立 parameterized query 的 placeholder 字串 ($1, $2, ...)
-    const placeholders = PROCESS_RECORD_COLUMNS.map((_, index) => `$${index + 1}`).join(', ');
+    // 呼叫計價函式
+    const result = await client.query(
+      `SELECT * FROM ${schemaName}.calculate_order_pricing($1::jsonb)`,
+      [JSON.stringify(orderData)]
+    );
     
-    // 3. 建立完整的 SQL 語句
-    const columns = PROCESS_RECORD_COLUMNS.join(', ');
-    const sql = `INSERT INTO ${schemaName}.process_record (${columns}) VALUES (${placeholders})`;
-
-    try {
-        client = await pool.connect();
-        
-        // 執行插入操作
-        const result = await client.query(sql, values);
-
-        console.log('紀錄成功新增:', result.rowCount, '列');
-        res.status(201).json({ 
-            message: '紀錄成功新增', 
-            // 返回關鍵識別資訊，方便前端確認
-            qono: recordData.qono, 
-            uid: recordData.uid 
-        });
-
-    } catch (err) {
-        // 處理資料庫錯誤，例如資料型別不匹配或 PRIMARY KEY 衝突
-        console.error('新增紀錄時發生錯誤', err.message);
-        // 返回 400 Bad Request 或 500 Internal Server Error
-        res.status(400).json({ 
-            error: '新增紀錄失敗', 
-            details: err.message,
-            code: err.code // 返回 PostgreSQL 錯誤碼 (例如 23505 for unique_violation)
-        });
-    } finally {
-        // 確保釋放連線
-        if (client) {
-            client.release();
-        }
-    }
+    console.log(`✅ 計算完成，共 ${result.rows.length} 個項目`);
+    
+    res.json({
+      success: true,
+      items: result.rows,
+      itemCount: result.rows.length
+    });
+    
+  } catch (error) {
+    console.error('❌ 計算訂單金額失敗:', error);
+    res.status(500).json({
+      success: false,
+      message: '計算訂單金額失敗',
+      error: error.message,
+      detail: error.detail
+    });
+  } finally {
+    if (client) client.release();
+  }
 });
+
+// ========================================
+// 2. 計算訂單金額 (格式化輸出，含中文欄位)
+// POST /api/qo-orders/calculate-pricing-formatted
+// ========================================
+router.post('/qo-orders/calculate-pricing-formatted', async (req, res) => {
+  const orderData = req.body;
+  
+  console.log('📊 開始計算訂單金額 (格式化):', {
+    cust_id: orderData.cust_id,
+    color_no: orderData.color_no,
+    product: orderData.product
+  });
+  
+  let client;
+  
+  try {
+    client = await pool.connect();
+    
+    // 呼叫格式化計價函式
+    const result = await client.query(
+      `SELECT * FROM ${schemaName}.calculate_order_pricing_formatted($1::jsonb)`,
+      [JSON.stringify(orderData)]
+    );
+    
+    console.log(`✅ 計算完成，共 ${result.rows.length} 個項目`);
+    
+    res.json({
+      success: true,
+      items: result.rows,
+      itemCount: result.rows.length
+    });
+    
+  } catch (error) {
+    console.error('❌ 計算訂單金額失敗:', error);
+    res.status(500).json({
+      success: false,
+      message: '計算訂單金額失敗',
+      error: error.message,
+      detail: error.detail
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// ========================================
+// 3. 只取得訂單總計
+// POST /api/qo-orders/calculate-total
+// ========================================
+router.post('/qo-orders/calculate-total', async (req, res) => {
+  const orderData = req.body;
+  
+  console.log('💰 計算訂單總金額:', {
+    cust_id: orderData.cust_id,
+    color_no: orderData.color_no
+  });
+  
+  let client;
+  
+  try {
+    client = await pool.connect();
+    
+    // 呼叫總計函式
+    const result = await client.query(
+      `SELECT * FROM ${schemaName}.calculate_order_total($1::jsonb)`,
+      [JSON.stringify(orderData)]
+    );
+    
+    const totals = result.rows[0];
+    
+    console.log('✅ 總計計算完成:', {
+      布料小計: totals['布料小計'],
+      加工小計: totals['加工小計'],
+      總金額: totals['總金額']
+    });
+    
+    res.json({
+      success: true,
+      totals: {
+        fabricSubtotal: parseFloat(totals['布料小計'] || 0),
+        processSubtotal: parseFloat(totals['加工小計'] || 0),
+        totalAmount: parseFloat(totals['總金額'] || 0),
+        itemCount: parseInt(totals['項目數'] || 0)
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ 計算總金額失敗:', error);
+    res.status(500).json({
+      success: false,
+      message: '計算總金額失敗',
+      error: error.message,
+      detail: error.detail
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
+
   // 返回 router 物件
   return router;
 };
