@@ -1359,18 +1359,24 @@ router.get('/qo-orders/:qono/order-details/:uid', async (req, res) => {
         uid,
         window_no,
         seq_no,
-        item_type,
-        item_code,
+        product,
+        color_no,
+        itemno,
         description,
-        quantity,
+        width,
+        height,
+        qty
         unit,
         list_price,
+        pcs,
         discount,
         unit_price,
         origin_amount,
         amount,
         pmcode,
-        remark
+        stock_qty,
+        stock_unit,
+        item_type
       FROM ${schemaName}.order_detail 
       WHERE qono = $1 AND uid = $2 
       ORDER BY seq_no
