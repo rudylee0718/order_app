@@ -1186,6 +1186,245 @@ router.get('/qo-orders/:qono/order-summary', async (req, res) => {
   }
 });
 
+// ========================================
+// 🌟 新增 1: 更新明細記錄並同步更新 order_detail
+// PUT /api/qo-orders/:qono/records-with-detail/:uid
+// ========================================
+router.put('/qo-orders/:qono/records-with-detail/:uid', async (req, res) => {
+  const { qono, uid } = req.params;
+  const updateData = req.body;
+  
+  let client;
+  
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    
+    // 1. 檢查訂單狀態
+    const orderCheck = await client.query(
+      `SELECT status FROM ${schemaName}.qo_orders WHERE qono = $1`,
+      [qono]
+    );
+    
+    if (orderCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        message: '找不到該訂單'
+      });
+    }
+    
+    if (orderCheck.rows[0].status !== 'DRAFT') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: '只能修改草稿狀態訂單的明細'
+      });
+    }
+    
+    // 2. 檢查 uid 是否存在
+    const recordCheck = await client.query(
+      `SELECT window_no FROM ${schemaName}.process_record WHERE qono = $1 AND uid = $2`,
+      [qono, uid]
+    );
+    
+    if (recordCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        message: '找不到該明細記錄'
+      });
+    }
+    
+    const windowNo = recordCheck.rows[0].window_no;
+    
+    // 3. 更新 process_record
+    const forbiddenFields = ['qono', 'uid', 'window_no'];
+    const updateFields = PROCESS_RECORD_COLUMNS.filter(col => 
+      !forbiddenFields.includes(col) && updateData[col] !== undefined
+    );
+    
+    if (updateFields.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: '沒有可更新的欄位'
+      });
+    }
+    
+    const setClause = updateFields.map((col, index) => 
+      `${col} = $${index + 3}`
+    ).join(', ');
+    
+    const values = [qono, uid, ...updateFields.map(col => updateData[col])];
+    
+    const recordResult = await client.query(
+      `UPDATE ${schemaName}.process_record 
+       SET ${setClause}, updated_at = NOW()
+       WHERE qono = $1 AND uid = $2
+       RETURNING *`,
+      values
+    );
+    
+    // 4. 刪除舊的 order_detail
+    await client.query(
+      `DELETE FROM ${schemaName}.order_detail 
+       WHERE qono = $1 AND uid = $2`,
+      [qono, uid]
+    );
+    
+    console.log(`🗑️ 已刪除 order_detail (qono: ${qono}, uid: ${uid})`);
+    
+    // 5. 重新建立 order_detail
+    const orderData = {
+      cust_id: updateData.cust_id,
+      color_no: updateData.color_no,
+      qty_yd: updateData.qty_yd,
+      product: updateData.product,
+      width: updateData.width,
+      height: updateData.height,
+      frames: updateData.frames,
+      process_qty: updateData.process_qty,
+      process_times: updateData.process_times,
+      pcs: updateData.pcs,
+      fabric: updateData.fabric,
+      process: updateData.process,
+      open_style: updateData.open_style,
+      joining_fabric: updateData.joining_fabric,
+      cutain_hem: updateData.cutain_hem,
+      label: updateData.label,
+      band_type: updateData.band_type,
+      iron: updateData.iron,
+      lead: updateData.lead,
+      hook_type: updateData.hook_type,
+      neck_style: updateData.neck_style,
+      band_with_velcro: updateData.band_with_velcro,
+      urgent: updateData.urgent,
+      band_on_side: updateData.band_on_side,
+      make_hole: updateData.make_hole,
+      velcro: updateData.velcro,
+      mark_line: updateData.mark_line,
+      special_sew: updateData.special_sew,
+      side_loop_fasteners: updateData.side_loop_fasteners,
+      hidden_sew: updateData.hidden_sew,
+    };
+    
+    const detailResult = await client.query(
+      `SELECT ${schemaName}.insert_order_detail($1, $2, $3, $4::jsonb) as inserted_count`,
+      [qono, uid, windowNo, JSON.stringify(orderData)]
+    );
+    
+    const insertedCount = detailResult.rows[0].inserted_count;
+    
+    console.log(`✅ 已重新建立 ${insertedCount} 筆 order_detail`);
+    
+    await client.query('COMMIT');
+    
+    res.json({
+      success: true,
+      message: '明細記錄和計價明細已更新',
+      record: recordResult.rows[0],
+      qono: qono,
+      uid: parseInt(uid),
+      window_no: windowNo,
+      detail_count: insertedCount
+    });
+    
+  } catch (error) {
+    if (client) await client.query('ROLLBACK');
+    console.error('更新明細記錄時發生錯誤:', error);
+    res.status(400).json({
+      success: false,
+      message: '更新明細記錄失敗',
+      error: error.message,
+      detail: error.detail
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// ========================================
+// 🌟 新增 2: 查詢特定 UID 的 order_detail（用於修改頁面載入）
+// GET /api/qo-orders/:qono/order-details/:uid
+// ========================================
+router.get('/qo-orders/:qono/order-details/:uid', async (req, res) => {
+  const { qono, uid } = req.params;
+  
+  try {
+    // 查詢該 uid 的所有計價明細
+    const result = await pool.query(`
+      SELECT 
+        qono,
+        uid,
+        window_no,
+        seq_no,
+        item_type,
+        item_code,
+        description,
+        quantity,
+        unit,
+        list_price,
+        discount,
+        unit_price,
+        origin_amount,
+        amount,
+        pmcode,
+        remark
+      FROM ${schemaName}.order_detail 
+      WHERE qono = $1 AND uid = $2 
+      ORDER BY seq_no
+    `, [qono, parseInt(uid)]);
+    
+    if (result.rows.length === 0) {
+      // 該 UID 尚未建立計價明細（正常情況）
+      return res.status(404).json({
+        success: false,
+        message: '該明細尚未建立計價資料',
+        qono: qono,
+        uid: parseInt(uid)
+      });
+    }
+    
+    // 計算統計資訊
+    let fabricSubtotal = 0;
+    let processSubtotal = 0;
+    
+    result.rows.forEach(item => {
+      const amount = parseFloat(item.amount || 0);
+      if (item.item_type === 'FABRIC') {
+        fabricSubtotal += amount;
+      } else if (item.item_type === 'PROCESS') {
+        processSubtotal += amount;
+      }
+    });
+    
+    const totalAmount = fabricSubtotal + processSubtotal;
+    
+    res.json({
+      success: true,
+      qono: qono,
+      uid: parseInt(uid),
+      window_no: result.rows[0].window_no,
+      items: result.rows,
+      summary: {
+        item_count: result.rows.length,
+        fabric_subtotal: fabricSubtotal,
+        process_subtotal: processSubtotal,
+        total_amount: totalAmount
+      }
+    });
+    
+  } catch (error) {
+    console.error('查詢 order_detail 失敗:', error);
+    res.status(500).json({
+      success: false,
+      message: '查詢計價明細失敗',
+      error: error.message
+    });
+  }
+});
+
   // 返回 router 物件
   return router;
 };
