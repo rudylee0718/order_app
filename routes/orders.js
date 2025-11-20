@@ -1432,7 +1432,7 @@ router.get('/qo-orders/:qono/order-details/:uid', async (req, res) => {
 });
 
   // 🌟 1. 取得貨運方式選項
-  router.get('/api/options/delivery', async (req, res) => {
+  router.get('/options/delivery', async (req, res) => {
     try {
       const query = `
         SELECT value, label, product, parent_value
@@ -1457,7 +1457,7 @@ router.get('/qo-orders/:qono/order-details/:uid', async (req, res) => {
   });
 
   // 🌟 2. 更新訂單主檔資訊
-router.put('/api/orders/:qono', async (req, res) => {
+router.put('/qo-orders/:qono', async (req, res) => {
   const { qono } = req.params;
   const {
     newcasename,
