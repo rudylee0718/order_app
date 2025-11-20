@@ -1431,6 +1431,99 @@ router.get('/qo-orders/:qono/order-details/:uid', async (req, res) => {
   }
 });
 
+  // 🌟 1. 取得貨運方式選項
+  router.get('/api/options/delivery', async (req, res) => {
+    try {
+      const query = `
+        SELECT value, label, product, parent_value
+        FROM app_order.options_data
+        WHERE key = 'delivery'
+        ORDER BY seq_id
+      `;
+      
+      const result = await pool.query(query);
+      
+      res.json({
+        success: true,
+        options: result.rows
+      });
+    } catch (error) {
+      console.error('取得貨運方式選項失敗:', error);
+      res.status(500).json({
+        success: false,
+        message: '取得貨運方式選項失敗'
+      });
+    }
+  });
+
+  // 🌟 2. 更新訂單主檔資訊
+router.put('/api/orders/:qono', async (req, res) => {
+  const { qono } = req.params;
+  const {
+    newcasename,
+    phone,
+    address,
+    ship_date,
+    ship_type,
+    ship_locate
+  } = req.body;
+
+  // 驗證必填欄位
+  if (!newcasename || newcasename.trim() === '') {
+    return res.status(400).json({
+      success: false,
+      message: '案場名稱為必填欄位'
+    });
+  }
+
+  try {
+    // 更新訂單主檔
+    const updateQuery = `
+      UPDATE app_order.qo_orders
+      SET 
+        newcasename = $1,
+        phone = $2,
+        address = $3,
+        ship_date = $4,
+        ship_type = $5,
+        ship_locate = $6,
+        updated_at = NOW()
+      WHERE qono = $7
+      RETURNING *
+    `;
+
+    const values = [
+      newcasename.trim(),
+      phone?.trim() || null,
+      address?.trim() || null,
+      ship_date || null,
+      ship_type || null,
+      ship_locate?.trim() || null,
+      qono
+    ];
+
+    const result = await pool.query(updateQuery, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: '找不到指定的訂單'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: '訂單資訊更新成功',
+      data: result.rows[0]
+    });
+  } catch (error) {
+    console.error('更新訂單主檔失敗:', error);
+    res.status(500).json({
+      success: false,
+      message: '更新訂單失敗: ' + error.message
+    });
+  }
+});
   // 返回 router 物件
   return router;
 };
