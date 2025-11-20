@@ -1435,10 +1435,10 @@ router.get('/qo-orders/:qono/order-details/:uid', async (req, res) => {
   router.get('/options/delivery', async (req, res) => {
     try {
       const query = `
-        SELECT value, label, product, parent_value
+        SELECT value, label
         FROM app_order.options_data
-        WHERE key = 'delivery'
-        ORDER BY seq_id
+        WHERE option_key = 'delivery'
+        ORDER BY option_id
       `;
       
       const result = await pool.query(query);
