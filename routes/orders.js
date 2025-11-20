@@ -1486,7 +1486,7 @@ router.put('/qo-orders/:qono', async (req, res) => {
         address = $3,
         ship_date = $4,
         ship_type = $5,
-        ship_locate = $6,
+        shipping_locate = $6,
         updated_at = NOW()
       WHERE qono = $7
       RETURNING *
