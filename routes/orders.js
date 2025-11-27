@@ -1,3 +1,4 @@
+//routes/orders.js
 const express = require('express');
 const router = express.Router();
 
@@ -1111,7 +1112,7 @@ router.get('/qo-orders/:qono/order-details', async (req, res) => {
     if (uid) {
       // 查詢特定 uid 的明細
       query = `
-        SELECT * FROM ${schemaName}.order_detail 
+        SELECT * FROM ${schemaName}.qo_order_detail 
         WHERE qono = $1 AND uid = $2 
         ORDER BY seq_no
       `;
@@ -1119,7 +1120,7 @@ router.get('/qo-orders/:qono/order-details', async (req, res) => {
     } else {
       // 查詢整個訂單的所有明細
       query = `
-        SELECT * FROM ${schemaName}.order_detail 
+        SELECT * FROM ${schemaName}.qo_order_detail 
         WHERE qono = $1 
         ORDER BY uid, seq_no
       `;
@@ -1137,7 +1138,7 @@ router.get('/qo-orders/:qono/order-details', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('查詢 order_detail 失敗:', error);
+    console.error('查詢 qo_order_detail 失敗:', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -1160,7 +1161,7 @@ router.get('/qo-orders/:qono/order-summary', async (req, res) => {
         SUM(origin_amount) as total_origin_amount,
         SUM(amount) as total_amount,
         SUM(amount) - SUM(origin_amount) as total_discount_amount
-      FROM ${schemaName}.order_detail 
+      FROM ${schemaName}.qo_order_detail 
       WHERE qono = $1
       GROUP BY qono
     `, [qono]);
@@ -1268,12 +1269,12 @@ router.put('/qo-orders/:qono/records-with-detail/:uid', async (req, res) => {
     
     // 4. 刪除舊的 order_detail
     await client.query(
-      `DELETE FROM ${schemaName}.order_detail 
+      `DELETE FROM ${schemaName}.qo_order_detail 
        WHERE qono = $1 AND uid = $2`,
       [qono, uid]
     );
     
-    console.log(`🗑️ 已刪除 order_detail (qono: ${qono}, uid: ${uid})`);
+    console.log(`🗑️ 已刪除 qo_order_detail (qono: ${qono}, uid: ${uid})`);
     
     // 5. 重新建立 order_detail
     const orderData = {
@@ -1316,7 +1317,7 @@ router.put('/qo-orders/:qono/records-with-detail/:uid', async (req, res) => {
     
     const insertedCount = detailResult.rows[0].inserted_count;
     
-    console.log(`✅ 已重新建立 ${insertedCount} 筆 order_detail`);
+    console.log(`✅ 已重新建立 ${insertedCount} 筆 qo_order_detail`);
     
     await client.query('COMMIT');
     
@@ -1377,7 +1378,7 @@ router.get('/qo-orders/:qono/order-details/:uid', async (req, res) => {
         stock_qty,
         stock_unit,
         item_type
-      FROM ${schemaName}.order_detail 
+      FROM ${schemaName}.qo_order_detail 
       WHERE qono = $1 AND uid = $2 
       ORDER BY seq_no
     `, [qono, parseInt(uid)]);
@@ -1422,7 +1423,7 @@ router.get('/qo-orders/:qono/order-details/:uid', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('查詢 order_detail 失敗:', error);
+    console.error('查詢 qo_order_detail 失敗:', error);
     res.status(500).json({
       success: false,
       message: '查詢計價明細失敗',
