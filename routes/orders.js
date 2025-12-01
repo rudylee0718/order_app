@@ -212,14 +212,29 @@ router.get('/qo-orders/:qono', async (req, res) => {
     }
     
     // 查詢明細 (依 window_no 排序)
+    // const recordsResult = await client.query(
+    //   `SELECT p.*,COALESCE(SUM(d.amount) OVER (PARTITION BY p.qono, p.uid), 0) AS total_amount FROM ${schemaName}.process_record p left join  ${schemaName}.qo_order_detail d
+    //    on d.qono = p.qono
+    //    AND d.uid = p.uid
+    //    WHERE p.qono = $1 
+    //    ORDER BY p.window_no,p.qono, p.uid`,
+    //   [qono]
+    // );
     const recordsResult = await client.query(
-      `SELECT p.*,COALESCE(SUM(d.amount) OVER (PARTITION BY p.qono, p.uid), 0) AS total_amount FROM ${schemaName}.process_record p left join  ${schemaName}.qo_order_detail d
-       on d.qono = p.qono
-       AND d.uid = p.uid
-       WHERE p.qono = $1 
-       ORDER BY p.window_no,p.qono, p.uid`,
+      `SELECT 
+          p.*,
+          COALESCE(t.total_amount, 0) AS total_amount
+      FROM ${schemaName}.process_record p
+      LEFT JOIN (
+        SELECT qono, uid, SUM(amount) AS total_amount
+        FROM ${schemaName}.qo_order_detail
+        GROUP BY qono, uid
+      ) t
+        ON t.qono = p.qono AND t.uid = p.uid
+      WHERE p.qono = $1
+      ORDER BY p.window_no, p.qono, p.uid`,
       [qono]
-    );
+      );
     
     res.json({
       success: true,
