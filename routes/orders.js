@@ -210,16 +210,7 @@ router.get('/qo-orders/:qono', async (req, res) => {
         message: '找不到該訂單'
       });
     }
-    
-    // 查詢明細 (依 window_no 排序)
-    // const recordsResult = await client.query(
-    //   `SELECT p.*,COALESCE(SUM(d.amount) OVER (PARTITION BY p.qono, p.uid), 0) AS total_amount FROM ${schemaName}.process_record p left join  ${schemaName}.qo_order_detail d
-    //    on d.qono = p.qono
-    //    AND d.uid = p.uid
-    //    WHERE p.qono = $1 
-    //    ORDER BY p.window_no,p.qono, p.uid`,
-    //   [qono]
-    // );
+
     const recordsResult = await client.query(
       `SELECT 
           p.*,
@@ -310,15 +301,46 @@ router.get('/qo-orders', async (req, res) => {
       paramIndex++;
     }    
 
-// 查詢訂單列表
-    // 注意：LIMIT 和 OFFSET 的參數索引需要調整
+// // 查詢訂單列表
+//     // 注意：LIMIT 和 OFFSET 的參數索引需要調整
+//     const ordersResult = await pool.query(
+//       `SELECT o.*, 
+//               (SELECT COUNT(*),sum(pcs) FROM ${schemaName}.process_record WHERE qono = o.qono) as record_count
+//        FROM ${schemaName}.qo_orders o
+//        ${whereClause}
+//        ORDER BY o.created_at DESC
+//        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+//       [...params, limit, offset] // 將 limit 和 offset 放在參數列表的最後
+//     );
+
     const ordersResult = await pool.query(
-      `SELECT o.*, 
-              (SELECT COUNT(*) FROM ${schemaName}.process_record WHERE qono = o.qono) as record_count
-       FROM ${schemaName}.qo_orders o
-       ${whereClause}
-       ORDER BY o.created_at DESC
-       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      `SELECT 
+    o.*,
+    COALESCE(pr.record_count, 0) AS record_count,
+    COALESCE(pr.total_pcs, 0) AS total_pcs,
+    COALESCE(od.total_amount, 0) AS total_amount
+    FROM 
+    ${schemaName}.qo_orders o
+      LEFT JOIN (
+          SELECT 
+              qono,
+              COUNT(*) AS record_count,
+              SUM(pcs) AS total_pcs
+          FROM ${schemaName}.process_record
+          GROUP BY qono
+      ) pr ON pr.qono = o.qono
+      LEFT JOIN (
+          SELECT 
+              qono,
+              SUM(amount) AS total_amount
+          FROM ${schemaName}.qo_order_detail
+          GROUP BY qono
+      ) od ON od.qono = o.qono
+
+      ${whereClause}
+
+      ORDER BY o.created_at DESC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, limit, offset] // 將 limit 和 offset 放在參數列表的最後
     );
     
