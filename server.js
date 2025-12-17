@@ -33,6 +33,7 @@ const pool = new Pool ({
 
 //專案的 schema 名稱
 const schemaName = 'app_order';
+const schemaName1 = 'process_schedule';
 
 /**
  * 連接到資料庫
@@ -55,6 +56,7 @@ const accountsRouter = require('./routes/accounts')(pool, schemaName);
 const loginRouter = require('./routes/login')(pool, schemaName);
 const loadUi=require('./routes/load_ui')(pool, schemaName);
 const ordersRouter=require('./routes/orders')(pool, schemaName);
+const scheduleRouter=require('./routes/schedule')(pool, schemaName1);
 
 // 將路由掛載到主應用程式上
 app.use('/api/customers', customersRouter);
@@ -62,6 +64,7 @@ app.use('/api/accounts', accountsRouter);
 app.use('/api/login', loginRouter);
 app.use('/api', loadUi);
 app.use('/api', ordersRouter);
+app.use('/api/schedule', scheduleRouter);
 
 
 // 定義一個測試用的 API 端點
