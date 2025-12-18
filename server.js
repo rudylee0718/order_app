@@ -57,6 +57,7 @@ const loginRouter = require('./routes/login')(pool, schemaName);
 const loadUi=require('./routes/load_ui')(pool, schemaName);
 const ordersRouter=require('./routes/orders')(pool, schemaName);
 const scheduleRouter=require('./routes/schedule')(pool, schemaName1);
+const conversationRouter=require('./routes/conversation')(pool, schemaName);
 
 // 將路由掛載到主應用程式上
 app.use('/api/customers', customersRouter);
@@ -65,6 +66,7 @@ app.use('/api/login', loginRouter);
 app.use('/api', loadUi);
 app.use('/api', ordersRouter);
 app.use('/api/schedule', scheduleRouter);
+app.use('/api', conversationRouter);
 
 
 // 定義一個測試用的 API 端點
