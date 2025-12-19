@@ -124,7 +124,7 @@ router.get('/users/search', async (req, res) => {
     const result = await pool.query(`
       SELECT 
         account,
-        description,
+        description
       FROM ${schemaName}.accounts
       WHERE (account ILIKE $1 OR description ILIKE $1)
         AND account != $2
@@ -397,7 +397,7 @@ router.post(
       const messageTime = new Date().toISOString();
 
       await client.query(`
-        INSERT INTO messages (
+        INSERT INTO ${schemaName}.messages (
           message_id, sender_account, receiver_account,
           message_type, image_url, timestamp
         )
