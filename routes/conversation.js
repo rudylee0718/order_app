@@ -277,7 +277,7 @@ router.get('/messages/:messageId', async (req, res) => {
 // POST /api/messages/send
 // 發送文字訊息
 router.post('/messages/send', async (req, res) => {
-  const { senderAccount, receiverAccount, message, messageType, replyToMessageId, timestamp } = req.body;
+  const { senderAccount, receiverAccount, message, messageType, replyToMessageId } = req.body;
   
   if (!senderAccount || !receiverAccount || (!message && messageType !== 'image')) {
     return res.status(400).json({ success: false, error: 'Missing parameters' });
@@ -289,7 +289,6 @@ router.post('/messages/send', async (req, res) => {
     await client.query('BEGIN');
     
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    const messageTime = timestamp || new Date().toISOString();
     const type = messageType || 'text';
     
     // 插入訊息
@@ -298,9 +297,16 @@ router.post('/messages/send', async (req, res) => {
         message_id, sender_account, receiver_account, 
         message, message_type, reply_to_message_id, timestamp
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `, [messageId, senderAccount, receiverAccount, message, type, replyToMessageId || null, messageTime]);
+      VALUES ($1, $2, $3, $4, $5, $6, , CURRENT_TIMESTAMP)
+    `, [messageId, senderAccount, receiverAccount, message, type, replyToMessageId || null]);
+    // 取得剛插入的訊息時間
+    const result = await client.query(`
+      SELECT timestamp FROM ${schemaName}.messages WHERE message_id = $1
+    `, [messageId]);
     
+    const messageTime = result.rows[0].timestamp;
+    
+
     // 更新對話記錄
     await updateConversations(client, senderAccount, receiverAccount, message, messageTime);
     
@@ -394,21 +400,26 @@ router.post(
       const imageUrl = await uploadToSupabase(req.file);
 
       const messageId = `msg_${Date.now()}`;
-      const messageTime = new Date().toISOString();
 
       await client.query(`
         INSERT INTO ${schemaName}.messages (
           message_id, sender_account, receiver_account,
           message_type, image_url, timestamp
         )
-        VALUES ($1,$2,$3,'image',$4,$5)
+        VALUES ($1,$2,$3,'image',$4,, CURRENT_TIMESTAMP)
       `, [
         messageId,
         senderAccount,
         receiverAccount,
-        imageUrl,
-        messageTime
+        imageUrl
       ]);
+
+      // 取得剛插入的訊息時間
+      const result = await client.query(`
+        SELECT timestamp FROM ${schemaName}.messages WHERE message_id = $1
+      `, [messageId]);
+      
+      const messageTime = result.rows[0].timestamp;
 
       await updateConversations(
         client,
