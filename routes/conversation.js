@@ -291,22 +291,18 @@ router.post('/messages/send', async (req, res) => {
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const type = messageType || 'text';
     
-    // 插入訊息
-    await client.query(`
+    // ✅ 插入訊息並立即返回 timestamp
+    const result = await client.query(`
       INSERT INTO ${schemaName}.messages (
         message_id, sender_account, receiver_account, 
         message, message_type, reply_to_message_id, timestamp
       )
-      VALUES ($1, $2, $3, $4, $5, $6, , CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+      RETURNING timestamp
     `, [messageId, senderAccount, receiverAccount, message, type, replyToMessageId || null]);
-    // 取得剛插入的訊息時間
-    const result = await client.query(`
-      SELECT timestamp FROM ${schemaName}.messages WHERE message_id = $1
-    `, [messageId]);
     
     const messageTime = result.rows[0].timestamp;
     
-
     // 更新對話記錄
     await updateConversations(client, senderAccount, receiverAccount, message, messageTime);
     
@@ -314,7 +310,8 @@ router.post('/messages/send', async (req, res) => {
     
     res.json({
       success: true,
-      messageId: messageId
+      messageId: messageId,
+      timestamp: messageTime
     });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -385,10 +382,13 @@ router.post(
   '/messages/send-image',
   upload.single('image'),
   async (req, res) => {
-
     const { senderAccount, receiverAccount } = req.body;
-    if (!req.file) {
-      return res.status(400).json({ success: false });
+    
+    if (!senderAccount || !receiverAccount || !req.file) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required parameters' 
+      });
     }
 
     const client = await pool.connect();
@@ -396,28 +396,19 @@ router.post(
     try {
       await client.query('BEGIN');
 
-      // 👇 上傳到 Supabase
+      // 上傳到 Supabase
       const imageUrl = await uploadToSupabase(req.file);
+      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-      const messageId = `msg_${Date.now()}`;
-
-      await client.query(`
+      // ✅ 插入訊息並立即返回 timestamp
+      const result = await client.query(`
         INSERT INTO ${schemaName}.messages (
           message_id, sender_account, receiver_account,
           message_type, image_url, timestamp
         )
-        VALUES ($1,$2,$3,'image',$4,, CURRENT_TIMESTAMP)
-      `, [
-        messageId,
-        senderAccount,
-        receiverAccount,
-        imageUrl
-      ]);
-
-      // 取得剛插入的訊息時間
-      const result = await client.query(`
-        SELECT timestamp FROM ${schemaName}.messages WHERE message_id = $1
-      `, [messageId]);
+        VALUES ($1, $2, $3, 'image', $4, CURRENT_TIMESTAMP)
+        RETURNING timestamp
+      `, [messageId, senderAccount, receiverAccount, imageUrl]);
       
       const messageTime = result.rows[0].timestamp;
 
@@ -433,13 +424,18 @@ router.post(
 
       res.json({
         success: true,
-        imageUrl
+        messageId: messageId,
+        imageUrl: imageUrl,
+        timestamp: messageTime
       });
 
     } catch (err) {
       await client.query('ROLLBACK');
-      console.error(err);
-      res.status(500).json({ success: false });
+      console.error('Error sending image message:', err);
+      res.status(500).json({ 
+        success: false, 
+        error: err.message 
+      });
     } finally {
       client.release();
     }
