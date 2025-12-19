@@ -85,7 +85,7 @@ router.get('/conversations/:account', async (req, res) => {
         c.last_message_time,
         c.unread_count,
         c.updated_at,
-        a.description as contact_name,
+        a.description as contact_name
       FROM ${schemaName}.conversations c
       LEFT JOIN ${schemaName}.accounts a ON c.contact_account = a.account
       WHERE c.user_account = $1
