@@ -84,7 +84,6 @@ router.get('/conversations/:account', async (req, res) => {
         c.last_message,
         c.last_message_time,
         c.unread_count,
-        c.created_at,
         c.updated_at,
         a.description as contact_name,
         a.profile_image_url as contact_avatar
@@ -105,7 +104,6 @@ router.get('/conversations/:account', async (req, res) => {
         lastMessage: row.last_message,
         lastMessageTime: row.last_message_time,
         unreadCount: row.unread_count,
-        createdAt: row.created_at,
         updatedAt: row.updated_at
       }))
     });
@@ -128,7 +126,6 @@ router.get('/users/search', async (req, res) => {
       SELECT 
         account,
         description,
-        profile_image_url
       FROM ${schemaName}.accounts
       WHERE (account ILIKE $1 OR description ILIKE $1)
         AND account != $2
@@ -141,7 +138,6 @@ router.get('/users/search', async (req, res) => {
       users: result.rows.map(row => ({
         account: row.account,
         name: row.description,
-        avatar: row.profile_image_url
       }))
     });
   } catch (error) {
