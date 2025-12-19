@@ -70,6 +70,86 @@ async function uploadToSupabase(file) {
 // 這裡我們需要一個工廠函式來接收資料庫客戶端和 schema 名稱
 module.exports = (pool, schemaName) => {
 
+// GET /api/conversations/:account
+// 取得某個用戶的所有對話列表
+router.get('/conversations/:account', async (req, res) => {
+  const { account } = req.params;
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        c.conversation_id,
+        c.user_account,
+        c.contact_account,
+        c.last_message,
+        c.last_message_time,
+        c.unread_count,
+        c.created_at,
+        c.updated_at,
+        a.description as contact_name,
+        a.profile_image_url as contact_avatar
+      FROM ${schemaName}.conversations c
+      LEFT JOIN ${schemaName}.accounts a ON c.contact_account = a.account
+      WHERE c.user_account = $1
+      ORDER BY c.last_message_time DESC
+    `, [account]);
+    
+    res.json({
+      success: true,
+      conversations: result.rows.map(row => ({
+        conversationId: row.conversation_id,
+        userAccount: row.user_account,
+        contactAccount: row.contact_account,
+        contactName: row.contact_name,
+        contactAvatar: row.contact_avatar,
+        lastMessage: row.last_message,
+        lastMessageTime: row.last_message_time,
+        unreadCount: row.unread_count,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching conversations:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+})
+
+// 搜尋用戶(排除自己)
+router.get('/users/search', async (req, res) => {
+  const { q, excludeAccount } = req.query;
+  
+  if (!q) {
+    return res.status(400).json({ success: false, error: 'Missing query parameter' });
+  }
+  
+  try {
+    const result = await pool.query(`
+      SELECT 
+        account,
+        description,
+        profile_image_url
+      FROM ${schemaName}.accounts
+      WHERE (account ILIKE $1 OR description ILIKE $1)
+        AND account != $2
+      ORDER BY description
+      LIMIT 20
+    `, [`%${q}%`, excludeAccount || '']);
+    
+    res.json({
+      success: true,
+      users: result.rows.map(row => ({
+        account: row.account,
+        name: row.description,
+        avatar: row.profile_image_url
+      }))
+    });
+  } catch (error) {
+    console.error('Error searching users:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
 router.get('/messages', async (req, res) => {
   const { account1, account2 } = req.query;
   
