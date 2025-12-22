@@ -59,42 +59,43 @@ async function uploadToSupabase(file) {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
-  // 更新群組對話摘要
-  async function updateGroupConversations(client, groupId, lastMessage, messageTime) {
-    try {
-      // 取得群組所有成員
-      const membersResult = await client.query(
-        `SELECT user_account FROM ${schemaName}.group_members WHERE group_id = $1`,
-        [groupId]
-      );
+// 更新群組對話摘要
+async function updateGroupConversations(client, schemaName, groupId, lastMessage, messageTime) {
+  try {
+    // 取得群組所有成員
+    const membersResult = await client.query(
+      `SELECT user_account FROM ${schemaName}.group_members WHERE group_id = $1`,
+      [groupId]
+    );
 
-      // 為每個成員更新或插入對話摘要
-      for (const member of membersResult.rows) {
-        await client.query(`
-          INSERT INTO ${schemaName}.group_conversations (
-            conversation_id, group_id, user_account, 
-            last_message, last_message_time, unread_count, updated_at
-          )
-          VALUES ($1, $2, $3, $4, $5, 1, CURRENT_TIMESTAMP)
-          ON CONFLICT (group_id, user_account) 
-          DO UPDATE SET
-            last_message = EXCLUDED.last_message,
-            last_message_time = EXCLUDED.last_message_time,
-            unread_count = ${schemaName}.group_conversations.unread_count + 1,
-            updated_at = CURRENT_TIMESTAMP
-        `, [
-          generateId('gconv'),
-          groupId,
-          member.user_account,
-          lastMessage.substring(0, 100),
-          messageTime
-        ]);
-      }
-    } catch (error) {
-      console.error('Error updating group conversations:', error);
-      throw error;
+    // 為每個成員更新或插入對話摘要
+    for (const member of membersResult.rows) {
+      await client.query(`
+        INSERT INTO ${schemaName}.group_conversations (
+          conversation_id, group_id, user_account, 
+          last_message, last_message_time, unread_count, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, 1, $6)
+        ON CONFLICT (group_id, user_account) 
+        DO UPDATE SET
+          last_message = EXCLUDED.last_message,
+          last_message_time = EXCLUDED.last_message_time,
+          unread_count = ${schemaName}.group_conversations.unread_count + 1,
+          updated_at = EXCLUDED.updated_at
+      `, [
+        generateId('gconv'),
+        groupId,
+        member.user_account,
+        lastMessage.substring(0, 100),
+        messageTime,
+        messageTime
+      ]);
     }
+  } catch (error) {
+    console.error('Error updating group conversations:', error);
+    throw error;
   }
+}
 
 // const upload = multer({
 //   storage: storage,
@@ -662,31 +663,33 @@ router.post('/groups/create', async (req, res) => {
     await client.query('BEGIN');
 
     const groupId = generateId('group');
-    const now = new Date().toISOString();
 
-    // 建立群組
-    await client.query(`
+    // ✅ 使用 CURRENT_TIMESTAMP 取得 Server 時間
+    const result = await client.query(`
       INSERT INTO ${schemaName}.chat_groups (
         group_id, group_name, group_description, 
         created_by, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6)
-    `, [groupId, groupName, description || null, createdBy, now, now]);
+      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      RETURNING created_at
+    `, [groupId, groupName, description || null, createdBy]);
+
+    const createdAt = result.rows[0].created_at;
 
     // 新增創建者為管理員
     await client.query(`
       INSERT INTO ${schemaName}.group_members (member_id, group_id, user_account, role, joined_at)
       VALUES ($1, $2, $3, $4, $5)
-    `, [generateId('gm'), groupId, createdBy, 'admin', now]);
+    `, [generateId('gm'), groupId, createdBy, 'admin', createdAt]);
 
     // 新增其他成員
     if (memberAccounts && Array.isArray(memberAccounts)) {
       for (const account of memberAccounts) {
-        if (account !== createdBy) { // 避免重複新增創建者
+        if (account !== createdBy) {
           await client.query(`
             INSERT INTO ${schemaName}.group_members (member_id, group_id, user_account, role, joined_at)
             VALUES ($1, $2, $3, $4, $5)
-          `, [generateId('gm'), groupId, account, 'member', now]);
+          `, [generateId('gm'), groupId, account, 'member', createdAt]);
         }
       }
     }
@@ -700,7 +703,7 @@ router.post('/groups/create', async (req, res) => {
           last_message, last_message_time, unread_count
         )
         VALUES ($1, $2, $3, $4, $5, 0)
-      `, [generateId('gconv'), groupId, account, '', now]);
+      `, [generateId('gconv'), groupId, account, '', createdAt]);
     }
 
     await client.query('COMMIT');
@@ -713,7 +716,7 @@ router.post('/groups/create', async (req, res) => {
         groupName,
         groupDescription: description,
         createdBy,
-        createdAt: now
+        createdAt
       }
     });
 
@@ -877,13 +880,14 @@ router.post('/groups/:groupId/members/add', async (req, res) => {
       });
     }
 
-    const now = new Date().toISOString();
-
-    // 新增成員
-    await client.query(`
+    // ✅ 使用 Server 時間
+    const result = await client.query(`
       INSERT INTO ${schemaName}.group_members (member_id, group_id, user_account, role, joined_at)
-      VALUES ($1, $2, $3, $4, $5)
-    `, [generateId('gm'), groupId, userAccount, role, now]);
+      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+      RETURNING joined_at
+    `, [generateId('gm'), groupId, userAccount, role]);
+
+    const joinedAt = result.rows[0].joined_at;
 
     // 初始化該成員的群組對話摘要
     await client.query(`
@@ -892,7 +896,7 @@ router.post('/groups/:groupId/members/add', async (req, res) => {
         last_message, last_message_time, unread_count
       )
       VALUES ($1, $2, $3, $4, $5, 0)
-    `, [generateId('gconv'), groupId, userAccount, '', now]);
+    `, [generateId('gconv'), groupId, userAccount, '', joinedAt]);
 
     await client.query('COMMIT');
 
@@ -1091,14 +1095,17 @@ router.put('/groups/:groupId/update', async (req, res) => {
       });
     }
 
+    // ✅ 使用 CURRENT_TIMESTAMP
     updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
     values.push(groupId);
 
-    await pool.query(`
+    await client.query(`
       UPDATE ${schemaName}.chat_groups 
       SET ${updateFields.join(', ')}
       WHERE group_id = $${paramCount}
     `, values);
+
+    await client.query('COMMIT');
 
     res.json({
       success: true,
@@ -1178,34 +1185,36 @@ router.post('/groups/:groupId/messages/send', async (req, res) => {
     await client.query('BEGIN');
 
     const messageId = generateId('msg');
-    const timestamp = new Date().toISOString();
 
-    // 插入訊息
-    await client.query(`
+    // ✅ 插入訊息並使用 Server 時間
+    const result = await client.query(`
       INSERT INTO ${schemaName}.messages (
         message_id, sender_account, message, message_type,
         reply_to_message_id, timestamp, group_id, is_group_message
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+      VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6, true)
+      RETURNING timestamp
     `, [
       messageId,
       senderAccount,
       message,
       replyToMessageId ? 'reply' : messageType,
       replyToMessageId,
-      timestamp,
       groupId
     ]);
 
+    const timestamp = result.rows[0].timestamp;
+
     // 更新群組對話摘要
-    await updateGroupConversations(client, groupId, message, timestamp);
+    await updateGroupConversations(client, schemaName, groupId, message, timestamp);
 
     await client.query('COMMIT');
 
     res.json({
       success: true,
       message: '訊息發送成功',
-      messageId
+      messageId,
+      timestamp
     });
 
   } catch (error) {
@@ -1220,11 +1229,10 @@ router.post('/groups/:groupId/messages/send', async (req, res) => {
     client.release();
   }
 });
-
-// 11. 發送群組圖片訊息
+// 11. 發送群組圖片訊息 (使用 Supabase)
 router.post('/groups/:groupId/messages/send-image', upload.single('image'), async (req, res) => {
   const { groupId } = req.params;
-  const { senderAccount, message, messageType = 'image', replyToMessageId, timestamp } = req.body;
+  const { senderAccount, message, messageType = 'image', replyToMessageId } = req.body;
 
   if (!senderAccount) {
     return res.status(400).json({ 
@@ -1245,34 +1253,35 @@ router.post('/groups/:groupId/messages/send-image', upload.single('image'), asyn
   try {
     await client.query('BEGIN');
 
+    // ✅ 上傳圖片到 Supabase
+    const imageUrl = await uploadToSupabase(req.file);
     const messageId = generateId('msg');
-    const messageTime = timestamp || new Date().toISOString();
-    const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
-    const imageUrl = `${baseUrl}/uploads/images/${req.file.filename}`;
-    const thumbnailUrl = imageUrl; // 可以使用 sharp 生成縮圖
+    const displayMessage = message || '[圖片]';
 
-    // 插入訊息
-    await client.query(`
+    // ✅ 插入訊息並使用 Server 時間
+    const result = await client.query(`
       INSERT INTO ${schemaName}.messages (
         message_id, sender_account, message, message_type,
         image_url, thumbnail_url, reply_to_message_id,
         timestamp, group_id, is_group_message
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, $8, true)
+      RETURNING timestamp
     `, [
       messageId,
       senderAccount,
-      message || '[圖片]',
+      displayMessage,
       replyToMessageId ? 'reply' : messageType,
       imageUrl,
-      thumbnailUrl,
+      imageUrl, // thumbnail_url 與 imageUrl 相同
       replyToMessageId,
-      messageTime,
       groupId
     ]);
 
+    const timestamp = result.rows[0].timestamp;
+
     // 更新群組對話摘要
-    await updateGroupConversations(client, groupId, message || '[圖片]', messageTime);
+    await updateGroupConversations(client, schemaName, groupId, displayMessage, timestamp);
 
     await client.query('COMMIT');
 
@@ -1281,7 +1290,8 @@ router.post('/groups/:groupId/messages/send-image', upload.single('image'), asyn
       message: '圖片發送成功',
       messageId,
       imageUrl,
-      thumbnailUrl
+      thumbnailUrl: imageUrl,
+      timestamp
     });
 
   } catch (error) {
@@ -1310,7 +1320,7 @@ router.put('/groups/:groupId/messages/read', async (req, res) => {
   }
 
   try {
-    // 重置未讀數量
+    // ✅ 使用 CURRENT_TIMESTAMP
     await pool.query(`
       UPDATE ${schemaName}.group_conversations
       SET unread_count = 0, updated_at = CURRENT_TIMESTAMP
