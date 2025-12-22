@@ -51,6 +51,51 @@ async function uploadToSupabase(file) {
 
   return data.publicUrl;
 }
+
+// ==================== 輔助函數 ====================
+
+  // 生成唯一 ID
+  function generateId(prefix) {
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  // 更新群組對話摘要
+  async function updateGroupConversations(client, groupId, lastMessage, messageTime) {
+    try {
+      // 取得群組所有成員
+      const membersResult = await client.query(
+        `SELECT user_account FROM ${schemaName}.group_members WHERE group_id = $1`,
+        [groupId]
+      );
+
+      // 為每個成員更新或插入對話摘要
+      for (const member of membersResult.rows) {
+        await client.query(`
+          INSERT INTO ${schemaName}.group_conversations (
+            conversation_id, group_id, user_account, 
+            last_message, last_message_time, unread_count, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, 1, CURRENT_TIMESTAMP)
+          ON CONFLICT (group_id, user_account) 
+          DO UPDATE SET
+            last_message = EXCLUDED.last_message,
+            last_message_time = EXCLUDED.last_message_time,
+            unread_count = ${schemaName}.group_conversations.unread_count + 1,
+            updated_at = CURRENT_TIMESTAMP
+        `, [
+          generateId('gconv'),
+          groupId,
+          member.user_account,
+          lastMessage.substring(0, 100),
+          messageTime
+        ]);
+      }
+    } catch (error) {
+      console.error('Error updating group conversations:', error);
+      throw error;
+    }
+  }
+
 // const upload = multer({
 //   storage: storage,
 //   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
@@ -596,6 +641,755 @@ router.get('/test', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       error: 'Database connection failed' 
+    });
+  }
+});
+
+// 1. 建立群組
+router.post('/groups/create', async (req, res) => {
+  const { groupName, createdBy, description, memberAccounts } = req.body;
+
+  if (!groupName || !createdBy) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '群組名稱和創建者為必填' 
+    });
+  }
+
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+
+    const groupId = generateId('group');
+    const now = new Date().toISOString();
+
+    // 建立群組
+    await client.query(`
+      INSERT INTO ${schemaName}.chat_groups (
+        group_id, group_name, group_description, 
+        created_by, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `, [groupId, groupName, description || null, createdBy, now, now]);
+
+    // 新增創建者為管理員
+    await client.query(`
+      INSERT INTO ${schemaName}.group_members (member_id, group_id, user_account, role, joined_at)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [generateId('gm'), groupId, createdBy, 'admin', now]);
+
+    // 新增其他成員
+    if (memberAccounts && Array.isArray(memberAccounts)) {
+      for (const account of memberAccounts) {
+        if (account !== createdBy) { // 避免重複新增創建者
+          await client.query(`
+            INSERT INTO ${schemaName}.group_members (member_id, group_id, user_account, role, joined_at)
+            VALUES ($1, $2, $3, $4, $5)
+          `, [generateId('gm'), groupId, account, 'member', now]);
+        }
+      }
+    }
+
+    // 初始化群組對話摘要
+    const allMembers = memberAccounts || [createdBy];
+    for (const account of allMembers) {
+      await client.query(`
+        INSERT INTO ${schemaName}.group_conversations (
+          conversation_id, group_id, user_account,
+          last_message, last_message_time, unread_count
+        )
+        VALUES ($1, $2, $3, $4, $5, 0)
+      `, [generateId('gconv'), groupId, account, '', now]);
+    }
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: '群組建立成功',
+      group: {
+        groupId,
+        groupName,
+        groupDescription: description,
+        createdBy,
+        createdAt: now
+      }
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error creating group:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '建立群組失敗',
+      error: error.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// 2. 取得用戶所屬的群組列表
+router.get('/groups/user/:account', async (req, res) => {
+  const { account } = req.params;
+
+  try {
+    const result = await pool.query(`
+      SELECT 
+        g.group_id,
+        g.group_name,
+        g.group_description,
+        g.created_by,
+        g.created_at,
+        g.updated_at,
+        gm.role,
+        gm.joined_at,
+        gc.last_message,
+        gc.last_message_time,
+        gc.unread_count,
+        (SELECT COUNT(*) FROM ${schemaName}.group_members WHERE group_id = g.group_id) as member_count
+      FROM ${schemaName}.chat_groups g
+      JOIN ${schemaName}.group_members gm ON g.group_id = gm.group_id
+      LEFT JOIN ${schemaName}.group_conversations gc ON g.group_id = gc.group_id AND gc.user_account = $1
+      WHERE gm.user_account = $1
+      ORDER BY gc.updated_at DESC NULLS LAST, g.updated_at DESC
+    `, [account]);
+
+    res.json({
+      success: true,
+      groups: result.rows
+    });
+
+  } catch (error) {
+    console.error('Error getting user groups:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '取得群組列表失敗',
+      error: error.message 
+    });
+  }
+});
+
+// 3. 取得群組詳情
+router.get('/groups/:groupId', async (req, res) => {
+  const { groupId } = req.params;
+
+  try {
+    const result = await pool.query(`
+      SELECT 
+        g.*,
+        u.description as creator_name,
+        (SELECT COUNT(*) FROM ${schemaName}.group_members WHERE group_id = g.group_id) as member_count
+      FROM ${schemaName}.chat_groups g
+      JOIN ${schemaName}.accounts u ON g.created_by = u.account
+      WHERE g.group_id = $1
+    `, [groupId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '群組不存在' 
+      });
+    }
+
+    res.json({
+      success: true,
+      group: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Error getting group details:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '取得群組詳情失敗',
+      error: error.message 
+    });
+  }
+});
+
+// 4. 取得群組成員列表
+router.get('/groups/:groupId/members', async (req, res) => {
+  const { groupId } = req.params;
+
+  try {
+    const result = await pool.query(`
+      SELECT 
+        gm.member_id,
+        gm.group_id,
+        gm.user_account,
+        gm.role,
+        gm.joined_at,
+        gm.last_read_message_id,
+        u.description as member_name,
+        u.customer_id
+      FROM ${schemaName}.group_members gm
+      JOIN ${schemaName}.accounts u ON gm.user_account = u.account
+      WHERE gm.group_id = $1
+      ORDER BY 
+        CASE WHEN gm.role = 'admin' THEN 0 ELSE 1 END,
+        gm.joined_at ASC
+    `, [groupId]);
+
+    res.json({
+      success: true,
+      members: result.rows
+    });
+
+  } catch (error) {
+    console.error('Error getting group members:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '取得群組成員失敗',
+      error: error.message 
+    });
+  }
+});
+
+// 5. 新增群組成員
+router.post('/groups/:groupId/members/add', async (req, res) => {
+  const { groupId } = req.params;
+  const { userAccount, role = 'member' } = req.body;
+
+  if (!userAccount) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '用戶帳號為必填' 
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // 檢查用戶是否已在群組中
+    const checkResult = await client.query(
+      `SELECT * FROM ${schemaName}.group_members WHERE group_id = $1 AND user_account = $2`,
+      [groupId, userAccount]
+    );
+
+    if (checkResult.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        success: false, 
+        message: '該用戶已在群組中' 
+      });
+    }
+
+    const now = new Date().toISOString();
+
+    // 新增成員
+    await client.query(`
+      INSERT INTO ${schemaName}.group_members (member_id, group_id, user_account, role, joined_at)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [generateId('gm'), groupId, userAccount, role, now]);
+
+    // 初始化該成員的群組對話摘要
+    await client.query(`
+      INSERT INTO ${schemaName}.group_conversations (
+        conversation_id, group_id, user_account,
+        last_message, last_message_time, unread_count
+      )
+      VALUES ($1, $2, $3, $4, $5, 0)
+    `, [generateId('gconv'), groupId, userAccount, '', now]);
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: '成員新增成功'
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error adding group member:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '新增成員失敗',
+      error: error.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// 6. 移除群組成員
+router.delete('/groups/:groupId/members/remove', async (req, res) => {
+  const { groupId } = req.params;
+  const { userAccount } = req.body;
+
+  if (!userAccount) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '用戶帳號為必填' 
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // 檢查是否為創建者
+    const groupResult = await client.query(
+      `SELECT created_by FROM ${schemaName}.chat_groups WHERE group_id = $1`,
+      [groupId]
+    );
+
+    if (groupResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ 
+        success: false, 
+        message: '群組不存在' 
+      });
+    }
+
+    if (groupResult.rows[0].created_by === userAccount) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        success: false, 
+        message: '無法移除群組創建者' 
+      });
+    }
+
+    // 移除成員
+    const deleteResult = await client.query(
+      `DELETE FROM ${schemaName}.group_members WHERE group_id = $1 AND user_account = $2`,
+      [groupId, userAccount]
+    );
+
+    if (deleteResult.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ 
+        success: false, 
+        message: '該用戶不在群組中' 
+      });
+    }
+
+    // 刪除該成員的群組對話摘要
+    await client.query(
+      `DELETE FROM ${schemaName}.group_conversations WHERE group_id = $1 AND user_account = $2`,
+      [groupId, userAccount]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: '成員移除成功'
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error removing group member:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '移除成員失敗',
+      error: error.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// 7. 退出群組
+router.post('/groups/:groupId/leave', async (req, res) => {
+  const { groupId } = req.params;
+  const { userAccount } = req.body;
+
+  if (!userAccount) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '用戶帳號為必填' 
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // 檢查是否為創建者
+    const groupResult = await client.query(
+      `SELECT created_by FROM ${schemaName}.chat_groups WHERE group_id = $1`,
+      [groupId]
+    );
+
+    if (groupResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ 
+        success: false, 
+        message: '群組不存在' 
+      });
+    }
+
+    if (groupResult.rows[0].created_by === userAccount) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        success: false, 
+        message: '創建者無法退出群組,請先轉移群組或刪除群組' 
+      });
+    }
+
+    // 移除成員
+    await client.query(
+      `DELETE FROM ${schemaName}.group_members WHERE group_id = $1 AND user_account = $2`,
+      [groupId, userAccount]
+    );
+
+    // 刪除對話摘要
+    await client.query(
+      `DELETE FROM ${schemaName}.group_conversations WHERE group_id = $1 AND user_account = $2`,
+      [groupId, userAccount]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: '已退出群組'
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error leaving group:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '退出群組失敗',
+      error: error.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// 8. 更新群組資訊
+router.put('/groups/:groupId/update', async (req, res) => {
+  const { groupId } = req.params;
+  const { groupName, description } = req.body;
+
+  try {
+    const updateFields = [];
+    const values = [];
+    let paramCount = 1;
+
+    if (groupName) {
+      updateFields.push(`group_name = $${paramCount++}`);
+      values.push(groupName);
+    }
+
+    if (description !== undefined) {
+      updateFields.push(`group_description = $${paramCount++}`);
+      values.push(description);
+    }
+
+    if (updateFields.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '沒有要更新的欄位' 
+      });
+    }
+
+    updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
+    values.push(groupId);
+
+    await pool.query(`
+      UPDATE ${schemaName}.chat_groups 
+      SET ${updateFields.join(', ')}
+      WHERE group_id = $${paramCount}
+    `, values);
+
+    res.json({
+      success: true,
+      message: '群組資訊更新成功'
+    });
+
+  } catch (error) {
+    console.error('Error updating group info:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '更新群組資訊失敗',
+      error: error.message 
+    });
+  }
+});
+
+// ==================== 群組訊息 API ====================
+
+// 9. 取得群組訊息
+router.get('/groups/:groupId/messages', async (req, res) => {
+  const { groupId } = req.params;
+
+  try {
+    const result = await pool.query(`
+      SELECT 
+        m.message_id,
+        m.sender_account,
+        m.message,
+        m.message_type,
+        m.image_url,
+        m.thumbnail_url,
+        m.reply_to_message_id,
+        m.timestamp,
+        m.group_id,
+        m.is_group_message,
+        u.description as sender_name,
+        rm.message as reply_to_message,
+        ru.description as reply_to_sender_name
+      FROM ${schemaName}.messages m
+      JOIN ${schemaName}.accounts u ON m.sender_account = u.account
+      LEFT JOIN ${schemaName}.messages rm ON m.reply_to_message_id = rm.message_id
+      LEFT JOIN ${schemaName}.accounts ru ON rm.sender_account = ru.account
+      WHERE m.group_id = $1 AND m.is_group_message = true
+      ORDER BY m.timestamp ASC
+    `, [groupId]);
+
+    res.json({
+      success: true,
+      messages: result.rows
+    });
+
+  } catch (error) {
+    console.error('Error getting group messages:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '取得群組訊息失敗',
+      error: error.message 
+    });
+  }
+});
+
+// 10. 發送群組文字訊息
+router.post('/groups/:groupId/messages/send', async (req, res) => {
+  const { groupId } = req.params;
+  const { senderAccount, message, messageType = 'text', replyToMessageId } = req.body;
+
+  if (!senderAccount || !message) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '發送者和訊息內容為必填' 
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const messageId = generateId('msg');
+    const timestamp = new Date().toISOString();
+
+    // 插入訊息
+    await client.query(`
+      INSERT INTO ${schemaName}.messages (
+        message_id, sender_account, message, message_type,
+        reply_to_message_id, timestamp, group_id, is_group_message
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, true)
+    `, [
+      messageId,
+      senderAccount,
+      message,
+      replyToMessageId ? 'reply' : messageType,
+      replyToMessageId,
+      timestamp,
+      groupId
+    ]);
+
+    // 更新群組對話摘要
+    await updateGroupConversations(client, groupId, message, timestamp);
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: '訊息發送成功',
+      messageId
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error sending group message:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '發送訊息失敗',
+      error: error.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// 11. 發送群組圖片訊息
+router.post('/groups/:groupId/messages/send-image', upload.single('image'), async (req, res) => {
+  const { groupId } = req.params;
+  const { senderAccount, message, messageType = 'image', replyToMessageId, timestamp } = req.body;
+
+  if (!senderAccount) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '發送者為必填' 
+    });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '請上傳圖片' 
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const messageId = generateId('msg');
+    const messageTime = timestamp || new Date().toISOString();
+    const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
+    const imageUrl = `${baseUrl}/uploads/images/${req.file.filename}`;
+    const thumbnailUrl = imageUrl; // 可以使用 sharp 生成縮圖
+
+    // 插入訊息
+    await client.query(`
+      INSERT INTO ${schemaName}.messages (
+        message_id, sender_account, message, message_type,
+        image_url, thumbnail_url, reply_to_message_id,
+        timestamp, group_id, is_group_message
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)
+    `, [
+      messageId,
+      senderAccount,
+      message || '[圖片]',
+      replyToMessageId ? 'reply' : messageType,
+      imageUrl,
+      thumbnailUrl,
+      replyToMessageId,
+      messageTime,
+      groupId
+    ]);
+
+    // 更新群組對話摘要
+    await updateGroupConversations(client, groupId, message || '[圖片]', messageTime);
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: '圖片發送成功',
+      messageId,
+      imageUrl,
+      thumbnailUrl
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error sending group image:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '發送圖片失敗',
+      error: error.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// 12. 標記群組訊息為已讀
+router.put('/groups/:groupId/messages/read', async (req, res) => {
+  const { groupId } = req.params;
+  const { userAccount } = req.body;
+
+  if (!userAccount) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '用戶帳號為必填' 
+    });
+  }
+
+  try {
+    // 重置未讀數量
+    await pool.query(`
+      UPDATE ${schemaName}.group_conversations
+      SET unread_count = 0, updated_at = CURRENT_TIMESTAMP
+      WHERE group_id = $1 AND user_account = $2
+    `, [groupId, userAccount]);
+
+    res.json({
+      success: true,
+      message: '已標記為已讀'
+    });
+
+  } catch (error) {
+    console.error('Error marking group messages as read:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '標記已讀失敗',
+      error: error.message 
+    });
+  }
+});
+
+// 13. 取得群組未讀訊息數量
+router.get('/groups/unread/count/:account', async (req, res) => {
+  const { account } = req.params;
+
+  try {
+    const result = await pool.query(
+      `SELECT COALESCE(SUM(unread_count), 0) as total_unread FROM ${schemaName}.group_conversations WHERE user_account = $1`,
+      [account]
+    );
+
+    res.json({
+      success: true,
+      count: parseInt(result.rows[0].total_unread)
+    });
+
+  } catch (error) {
+    console.error('Error getting group unread count:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '取得未讀數量失敗',
+      error: error.message 
+    });
+  }
+});
+
+// 14. 搜尋群組
+router.get('/groups/search', async (req, res) => {
+  const { q } = req.query;
+
+  if (!q) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '請提供搜尋關鍵字' 
+    });
+  }
+
+  try {
+    const result = await pool.query(`
+      SELECT 
+        g.*,
+        (SELECT COUNT(*) FROM ${schemaName}.group_members WHERE group_id = g.group_id) as member_count
+      FROM ${schemaName}.chat_groups g
+      WHERE g.group_name ILIKE $1
+      ORDER BY g.updated_at DESC
+      LIMIT 50
+    `, [`%${q}%`]);
+
+    res.json({
+      success: true,
+      groups: result.rows
+    });
+
+  } catch (error) {
+    console.error('Error searching groups:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '搜尋群組失敗',
+      error: error.message 
     });
   }
 });
