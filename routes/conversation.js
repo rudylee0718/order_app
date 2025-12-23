@@ -171,7 +171,7 @@ router.get('/users/search', async (req, res) => {
       SELECT 
         account,
         description,
-        customer_id,
+        customer_id
       FROM ${schemaName}.accounts
       WHERE (account ILIKE $1 OR description ILIKE $1)
         AND account != $2
