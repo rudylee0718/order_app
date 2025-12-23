@@ -1,4 +1,4 @@
-// routes/login.js
+// routes/conversation.js
 
 const express = require('express');
 const multer = require('multer');
@@ -1401,6 +1401,418 @@ router.get('/groups/search', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: '搜尋群組失敗',
+      error: error.message 
+    });
+  }
+});
+
+// ==================== 多圖上傳 API ====================
+
+// 發送多圖訊息 (個人對話)
+router.post(
+  '/messages/send-images',
+  upload.array('images', 9), // 最多9張圖片
+  async (req, res) => {
+    const { senderAccount, receiverAccount, message } = req.body;
+    
+    if (!senderAccount || !receiverAccount) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required parameters' 
+      });
+    }
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: '請至少上傳一張圖片' 
+      });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const imageCount = req.files.length;
+      
+      // 上傳所有圖片到 Supabase
+      const imageUrls = [];
+      for (let i = 0; i < req.files.length; i++) {
+        const imageUrl = await uploadToSupabase(req.files[i]);
+        imageUrls.push(imageUrl);
+      }
+
+      // 插入訊息
+      const result = await client.query(`
+        INSERT INTO ${schemaName}.messages (
+          message_id, sender_account, receiver_account,
+          message, message_type, image_count, timestamp
+        )
+        VALUES ($1, $2, $3, $4, 'image', $5, CURRENT_TIMESTAMP)
+        RETURNING timestamp
+      `, [messageId, senderAccount, receiverAccount, message || '', imageCount]);
+      
+      const messageTime = result.rows[0].timestamp;
+
+      // 插入圖片關聯資料
+      for (let i = 0; i < imageUrls.length; i++) {
+        const imageId = `img_${messageId}_${i}`;
+        await client.query(`
+          INSERT INTO ${schemaName}.message_images (
+            image_id, message_id, image_url, thumbnail_url, image_order
+          )
+          VALUES ($1, $2, $3, $4, $5)
+        `, [imageId, messageId, imageUrls[i], imageUrls[i], i]);
+      }
+
+      // 更新對話記錄
+      const displayMessage = message || `[${imageCount}張圖片]`;
+      await updateConversations(
+        client,
+        senderAccount,
+        receiverAccount,
+        displayMessage,
+        messageTime
+      );
+
+      await client.query('COMMIT');
+
+      res.json({
+        success: true,
+        messageId: messageId,
+        imageUrls: imageUrls,
+        imageCount: imageCount,
+        timestamp: messageTime
+      });
+
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('Error sending multiple images:', err);
+      res.status(500).json({ 
+        success: false, 
+        error: err.message 
+      });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+// 發送多圖訊息 (群組對話)
+router.post(
+  '/groups/:groupId/messages/send-images',
+  upload.array('images', 9),
+  async (req, res) => {
+    const { groupId } = req.params;
+    const { senderAccount, message, replyToMessageId } = req.body;
+
+    if (!senderAccount) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '發送者為必填' 
+      });
+    }
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '請至少上傳一張圖片' 
+      });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const messageId = generateId('msg');
+      const imageCount = req.files.length;
+      
+      // 上傳所有圖片到 Supabase
+      const imageUrls = [];
+      for (let i = 0; i < req.files.length; i++) {
+        const imageUrl = await uploadToSupabase(req.files[i]);
+        imageUrls.push(imageUrl);
+      }
+
+      // 插入訊息
+      const result = await client.query(`
+        INSERT INTO ${schemaName}.messages (
+          message_id, sender_account, message, message_type,
+          reply_to_message_id, timestamp, group_id, 
+          is_group_message, image_count
+        )
+        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6, true, $7)
+        RETURNING timestamp
+      `, [
+        messageId,
+        senderAccount,
+        message || '',
+        replyToMessageId ? 'reply' : 'image',
+        replyToMessageId,
+        groupId,
+        imageCount
+      ]);
+
+      const timestamp = result.rows[0].timestamp;
+
+      // 插入圖片關聯資料
+      for (let i = 0; i < imageUrls.length; i++) {
+        const imageId = `img_${messageId}_${i}`;
+        await client.query(`
+          INSERT INTO ${schemaName}.message_images (
+            image_id, message_id, image_url, thumbnail_url, image_order
+          )
+          VALUES ($1, $2, $3, $4, $5)
+        `, [imageId, messageId, imageUrls[i], imageUrls[i], i]);
+      }
+
+      // 更新群組對話摘要
+      const displayMessage = message || `[${imageCount}張圖片]`;
+      await updateGroupConversations(client, schemaName, groupId, displayMessage, timestamp);
+
+      await client.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: '圖片發送成功',
+        messageId,
+        imageUrls,
+        imageCount,
+        timestamp
+      });
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('Error sending group images:', error);
+      res.status(500).json({ 
+        success: false, 
+        message: '發送圖片失敗',
+        error: error.message 
+      });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+// 取得訊息的所有圖片
+router.get('/messages/:messageId/images', async (req, res) => {
+  const { messageId } = req.params;
+
+  try {
+    const result = await pool.query(`
+      SELECT 
+        image_id,
+        message_id,
+        image_url,
+        thumbnail_url,
+        image_order
+      FROM ${schemaName}.message_images
+      WHERE message_id = $1
+      ORDER BY image_order ASC
+    `, [messageId]);
+
+    res.json({
+      success: true,
+      images: result.rows
+    });
+
+  } catch (error) {
+    console.error('Error getting message images:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
+
+// 修改取得訊息的 API,包含圖片資訊
+router.get('/messages-with-images', async (req, res) => {
+  const { account1, account2 } = req.query;
+  
+  if (!account1 || !account2) {
+    return res.status(400).json({ success: false, error: 'Missing parameters' });
+  }
+  
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    // 查詢訊息
+    const messagesResult = await client.query(`
+      SELECT 
+        m.message_id,
+        m.sender_account,
+        m.receiver_account,
+        m.message,
+        m.message_type,
+        m.image_url,
+        m.thumbnail_url,
+        m.image_count,
+        m.reply_to_message_id,
+        m.timestamp,
+        m.is_read,
+        m.read_at,
+        rm.message as reply_to_message,
+        rm.sender_account as reply_to_sender,
+        ru.description as reply_to_sender_name
+      FROM ${schemaName}.messages m
+      LEFT JOIN ${schemaName}.messages rm ON m.reply_to_message_id = rm.message_id
+      LEFT JOIN ${schemaName}.accounts ru ON rm.sender_account = ru.account
+      WHERE (m.sender_account = $1 AND m.receiver_account = $2)
+         OR (m.sender_account = $2 AND m.receiver_account = $1)
+      ORDER BY m.timestamp ASC
+    `, [account1, account2]);
+
+    // 為每個訊息取得圖片
+    const messagesWithImages = [];
+    for (const msg of messagesResult.rows) {
+      const messageData = {
+        messageId: msg.message_id,
+        senderAccount: msg.sender_account,
+        receiverAccount: msg.receiver_account,
+        message: msg.message,
+        messageType: msg.message_type,
+        imageUrl: msg.image_url,
+        thumbnailUrl: msg.thumbnail_url,
+        imageCount: msg.image_count || 0,
+        replyToMessageId: msg.reply_to_message_id,
+        replyToMessage: msg.reply_to_message,
+        replyToSender: msg.reply_to_sender,
+        replyToSenderName: msg.reply_to_sender_name,
+        timestamp: msg.timestamp,
+        isRead: msg.is_read,
+        readAt: msg.read_at,
+        images: []
+      };
+
+      // 如果有多張圖片,取得圖片列表
+      if (msg.image_count > 0) {
+        const imagesResult = await client.query(`
+          SELECT image_url, thumbnail_url, image_order
+          FROM ${schemaName}.message_images
+          WHERE message_id = $1
+          ORDER BY image_order ASC
+        `, [msg.message_id]);
+        
+        messageData.images = imagesResult.rows;
+      }
+
+      messagesWithImages.push(messageData);
+    }
+    
+    // 標記訊息為已讀
+    await client.query(`
+      UPDATE ${schemaName}.messages
+      SET is_read = TRUE, read_at = CURRENT_TIMESTAMP
+      WHERE receiver_account = $1 
+        AND sender_account = $2 
+        AND is_read = FALSE
+    `, [account1, account2]);
+    
+    // 清除未讀數量
+    await client.query(`
+      UPDATE ${schemaName}.conversations
+      SET unread_count = 0
+      WHERE user_account = $1 
+        AND contact_account = $2
+    `, [account1, account2]);
+    
+    await client.query('COMMIT');
+    
+    res.json({
+      success: true,
+      messages: messagesWithImages
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error fetching messages with images:', error);
+    res.status(500).json({ success: false, error: 'Internal server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// 修改群組訊息 API,包含圖片資訊
+router.get('/groups/:groupId/messages-with-images', async (req, res) => {
+  const { groupId } = req.params;
+
+  try {
+    // 查詢訊息
+    const messagesResult = await pool.query(`
+      SELECT 
+        m.message_id,
+        m.sender_account,
+        m.message,
+        m.message_type,
+        m.image_url,
+        m.thumbnail_url,
+        m.image_count,
+        m.reply_to_message_id,
+        m.timestamp,
+        m.group_id,
+        m.is_group_message,
+        u.description as sender_name,
+        rm.message as reply_to_message,
+        ru.description as reply_to_sender_name
+      FROM ${schemaName}.messages m
+      JOIN ${schemaName}.accounts u ON m.sender_account = u.account
+      LEFT JOIN ${schemaName}.messages rm ON m.reply_to_message_id = rm.message_id
+      LEFT JOIN ${schemaName}.accounts ru ON rm.sender_account = ru.account
+      WHERE m.group_id = $1 AND m.is_group_message = true
+      ORDER BY m.timestamp ASC
+    `, [groupId]);
+
+    // 為每個訊息取得圖片
+    const messagesWithImages = [];
+    for (const msg of messagesResult.rows) {
+      const messageData = {
+        message_id: msg.message_id,
+        sender_account: msg.sender_account,
+        message: msg.message,
+        message_type: msg.message_type,
+        image_url: msg.image_url,
+        thumbnail_url: msg.thumbnail_url,
+        image_count: msg.image_count || 0,
+        reply_to_message_id: msg.reply_to_message_id,
+        timestamp: msg.timestamp,
+        group_id: msg.group_id,
+        is_group_message: msg.is_group_message,
+        sender_name: msg.sender_name,
+        reply_to_message: msg.reply_to_message,
+        reply_to_sender_name: msg.reply_to_sender_name,
+        images: []
+      };
+
+      // 如果有多張圖片,取得圖片列表
+      if (msg.image_count > 0) {
+        const imagesResult = await pool.query(`
+          SELECT image_url, thumbnail_url, image_order
+          FROM ${schemaName}.message_images
+          WHERE message_id = $1
+          ORDER BY image_order ASC
+        `, [msg.message_id]);
+        
+        messageData.images = imagesResult.rows;
+      }
+
+      messagesWithImages.push(messageData);
+    }
+
+    res.json({
+      success: true,
+      messages: messagesWithImages
+    });
+
+  } catch (error) {
+    console.error('Error getting group messages with images:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '取得群組訊息失敗',
       error: error.message 
     });
   }
