@@ -1258,7 +1258,7 @@ router.post('/groups/:groupId/messages/send-image', upload.single('image'), asyn
     // ✅ 上傳圖片到 Supabase
     const imageUrl = await uploadToSupabase(req.file);
     const messageId = generateId('msg');
-    const displayMessage = message || '[圖片]';
+    const displayMessage = message || null;
 
     // ✅ 插入訊息並使用 Server 時間
     const result = await client.query(`
