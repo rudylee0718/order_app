@@ -170,7 +170,8 @@ router.get('/users/search', async (req, res) => {
     const result = await pool.query(`
       SELECT 
         account,
-        description
+        description,
+        customer_id,
       FROM ${schemaName}.accounts
       WHERE (account ILIKE $1 OR description ILIKE $1)
         AND account != $2
@@ -182,7 +183,8 @@ router.get('/users/search', async (req, res) => {
       success: true,
       users: result.rows.map(row => ({
         account: row.account,
-        name: row.description,
+        accountName: row.description,
+        customerId : row.customer_id,
       }))
     });
   } catch (error) {
