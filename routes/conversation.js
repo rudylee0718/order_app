@@ -1817,6 +1817,184 @@ router.get('/groups/:groupId/messages-with-images', async (req, res) => {
     });
   }
 });
+// ==================== 多張圖片上傳 API ====================
+
+// 個人訊息 - 發送多張圖片
+router.post(
+  '/messages/send-multi-images',
+  upload.array('images', 9), // ✅ 注意:使用 upload.array
+  async (req, res) => {
+    const { senderAccount, receiverAccount, message, replyToMessageId } = req.body;
+    
+    console.log('📸 收到多圖上傳請求:', {
+      senderAccount,
+      receiverAccount,
+      fileCount: req.files?.length || 0
+    });
+    
+    if (!senderAccount || !receiverAccount || !req.files || req.files.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required parameters or no images uploaded' 
+      });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      // 上傳所有圖片到 Supabase
+      const imageUrls = [];
+      for (const file of req.files) {
+        console.log('📤 上傳圖片:', file.originalname);
+        const imageUrl = await uploadToSupabase(file);
+        imageUrls.push(imageUrl);
+      }
+
+      console.log('✅ 所有圖片上傳成功:', imageUrls.length);
+
+      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const displayMessage = message || `[${imageUrls.length} 張圖片]`;
+
+      // ✅ 插入訊息,將圖片 URLs 儲存為 JSON 陣列
+      const result = await client.query(`
+        INSERT INTO ${schemaName}.messages (
+          message_id, sender_account, receiver_account,
+          message, message_type, image_url, reply_to_message_id, timestamp
+        )
+        VALUES ($1, $2, $3, $4, 'multi_image', $5, $6, CURRENT_TIMESTAMP)
+        RETURNING timestamp
+      `, [
+        messageId, 
+        senderAccount, 
+        receiverAccount, 
+        displayMessage,
+        JSON.stringify(imageUrls), // ✅ 儲存為 JSON 陣列
+        replyToMessageId || null
+      ]);
+      
+      const messageTime = result.rows[0].timestamp;
+
+      await updateConversations(
+        client,
+        senderAccount,
+        receiverAccount,
+        displayMessage,
+        messageTime
+      );
+
+      await client.query('COMMIT');
+
+      console.log('✅ 多圖訊息儲存成功:', messageId);
+
+      res.json({
+        success: true,
+        messageId: messageId,
+        imageUrls: imageUrls,
+        imageCount: imageUrls.length,
+        timestamp: messageTime
+      });
+
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('❌ Error sending multi images message:', err);
+      res.status(500).json({ 
+        success: false, 
+        error: err.message 
+      });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+// 群組訊息 - 發送多張圖片
+router.post(
+  '/groups/:groupId/messages/send-multi-images',
+  upload.array('images', 9),
+  async (req, res) => {
+    const { groupId } = req.params;
+    const { senderAccount, message, replyToMessageId } = req.body;
+
+    console.log('📸 收到群組多圖上傳請求:', {
+      groupId,
+      senderAccount,
+      fileCount: req.files?.length || 0
+    });
+
+    if (!senderAccount || !req.files || req.files.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '發送者為必填且至少需要一張圖片' 
+      });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      // 上傳所有圖片到 Supabase
+      const imageUrls = [];
+      for (const file of req.files) {
+        const imageUrl = await uploadToSupabase(file);
+        imageUrls.push(imageUrl);
+      }
+
+      const messageId = generateId('msg');
+      const displayMessage = message || `[${imageUrls.length} 張圖片]`;
+
+      // ✅ 插入訊息
+      const result = await client.query(`
+        INSERT INTO ${schemaName}.messages (
+          message_id, sender_account, message, message_type,
+          image_url, reply_to_message_id,
+          timestamp, group_id, is_group_message
+        )
+        VALUES ($1, $2, $3, 'multi_image', $4, $5, CURRENT_TIMESTAMP, $6, true)
+        RETURNING timestamp
+      `, [
+        messageId,
+        senderAccount,
+        displayMessage,
+        JSON.stringify(imageUrls),
+        replyToMessageId || null,
+        groupId
+      ]);
+
+      const timestamp = result.rows[0].timestamp;
+
+      // 更新群組對話摘要
+      await updateGroupConversations(client, schemaName, groupId, displayMessage, timestamp);
+
+      await client.query('COMMIT');
+
+      console.log('✅ 群組多圖訊息儲存成功:', messageId);
+
+      res.json({
+        success: true,
+        message: '圖片發送成功',
+        messageId,
+        imageUrls,
+        imageCount: imageUrls.length,
+        timestamp
+      });
+
+    } catch (error) {
+      await client.query('ROLLBACK');
+      console.error('❌ Error sending group multi images:', error);
+      res.status(500).json({ 
+        success: false, 
+        message: '發送圖片失敗',
+        error: error.message 
+      });
+    } finally {
+      client.release();
+    }
+  }
+);
+
   // 返回 router 物件
   return router;
 };
