@@ -34,6 +34,7 @@ class MessageService {
         m.is_read,
         m.read_at,
         rm.message as reply_to_message,
+        rm.image_url AS reply_to_image_url,
         rm.sender_account as reply_to_sender,
         ru.description as reply_to_sender_name
       FROM ${this.schemaName}.messages m
