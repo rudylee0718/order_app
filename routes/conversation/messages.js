@@ -34,29 +34,33 @@ module.exports = (pool, schemaName) => {
         await conversationService.markAsRead(account1, account2);
         
         await client.query('COMMIT');
-        
+        console.log(messages);
         res.json({
           success: true,
-          messages: messages.map(msg => ({
-            messageId: msg.message_id,
-            senderAccount: msg.sender_account,
-            receiverAccount: msg.receiver_account,
-            message: msg.message,
-            messageType: msg.message_type,
-            imageUrl: msg.image_url,
-            thumbnailUrl: msg.thumbnail_url,
-            imageCount: msg.image_count || 0,
-            images: msg.images || [],
-            replyToMessageId: msg.reply_to_message_id,
-            replyToMessage: msg.reply_to_message,
-            replyToSender: msg.reply_to_sender,
-            replyToSenderName: msg.reply_to_sender_name,
-            replyToImageUrl : msg.reply_to_image_url,
-            timestamp: msg.timestamp,
-            isRead: msg.is_read,
-            readAt: msg.read_at
-          }))
+          raw_data_from_db: messages 
         });
+        // res.json({
+        //   success: true,
+        //   messages: messages.map(msg => ({
+        //     messageId: msg.message_id,
+        //     senderAccount: msg.sender_account,
+        //     receiverAccount: msg.receiver_account,
+        //     message: msg.message,
+        //     messageType: msg.message_type,
+        //     imageUrl: msg.image_url,
+        //     thumbnailUrl: msg.thumbnail_url,
+        //     imageCount: msg.image_count || 0,
+        //     images: msg.images || [],
+        //     replyToMessageId: msg.reply_to_message_id,
+        //     replyToMessage: msg.reply_to_message,
+        //     replyToSender: msg.reply_to_sender,
+        //     replyToSenderName: msg.reply_to_sender_name,
+        //     replyToImageUrl : msg.reply_to_image_url || [],
+        //     timestamp: msg.timestamp,
+        //     isRead: msg.is_read,
+        //     readAt: msg.read_at
+        //   }))
+        // });
       } catch (error) {
         await client.query('ROLLBACK');
         throw error;

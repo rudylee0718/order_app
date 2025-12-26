@@ -221,6 +221,7 @@ router.get('/messages', async (req, res) => {
         m.read_at,
         rm.message as reply_to_message,
         rm.sender_account as reply_to_sender,
+        m.image_url as reply_to_image_url,
         ru.description as reply_to_sender_name
       FROM ${schemaName}.messages m
       LEFT JOIN ${schemaName}.messages rm ON m.reply_to_message_id = rm.message_id
@@ -263,6 +264,7 @@ router.get('/messages', async (req, res) => {
         replyToMessage: row.reply_to_message,
         replyToSender: row.reply_to_sender,
         replyToSenderName: row.reply_to_sender_name,
+        replyToImageUrl : row.reply_to_image_url,
         timestamp: row.timestamp,
         isRead: row.is_read,
         readAt: row.read_at
@@ -1145,7 +1147,8 @@ router.get('/groups/:groupId/messages', async (req, res) => {
         m.is_group_message,
         u.description as sender_name,
         rm.message as reply_to_message,
-        ru.description as reply_to_sender_name
+        ru.description as reply_to_sender_name,
+        m.image_url as reply_to_image_url
       FROM ${schemaName}.messages m
       JOIN ${schemaName}.accounts u ON m.sender_account = u.account
       LEFT JOIN ${schemaName}.messages rm ON m.reply_to_message_id = rm.message_id
