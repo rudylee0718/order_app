@@ -51,6 +51,7 @@ module.exports = (pool, schemaName) => {
             replyToMessage: msg.reply_to_message,
             replyToSender: msg.reply_to_sender,
             replyToSenderName: msg.reply_to_sender_name,
+            replyToImageUrl : msg.reply_to_image_url,
             timestamp: msg.timestamp,
             isRead: msg.is_read,
             readAt: msg.read_at
