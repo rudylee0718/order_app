@@ -1217,7 +1217,7 @@ router.get('/groups/:groupId/messages', async (req, res) => {
         u.description as sender_name,
         rm.message as reply_to_message,
         ru.description as reply_to_sender_name,
-        m.image_url as reply_to_image_url
+        m.reply_to_image_url 
       FROM ${schemaName}.messages m
       JOIN ${schemaName}.accounts u ON m.sender_account = u.account
       LEFT JOIN ${schemaName}.messages rm ON m.reply_to_message_id = rm.message_id
