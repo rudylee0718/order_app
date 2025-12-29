@@ -210,6 +210,7 @@ router.get('/messages', async (req, res) => {
       SELECT 
         m.message_id,
         m.sender_account,
+        ru.description as sender_name,
         m.receiver_account,
         m.message,
         m.message_type,
@@ -255,6 +256,7 @@ router.get('/messages', async (req, res) => {
       messages: messagesResult.rows.map(row => ({
         messageId: row.message_id,
         senderAccount: row.sender_account,
+        senderName:row.sender_name,
         receiverAccount: row.receiver_account,
         message: row.message,
         messageType: row.message_type,
@@ -1650,6 +1652,7 @@ router.get('/messages-with-images', async (req, res) => {
       SELECT 
         m.message_id,
         m.sender_account,
+        ru.descprition as sender_name,
         m.receiver_account,
         m.message,
         m.message_type,
@@ -1677,6 +1680,7 @@ router.get('/messages-with-images', async (req, res) => {
       const messageData = {
         messageId: msg.message_id,
         senderAccount: msg.sender_account,
+        senderName:msg.sender_name,
         receiverAccount: msg.receiver_account,
         message: msg.message,
         messageType: msg.message_type,
