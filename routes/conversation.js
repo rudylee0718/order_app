@@ -59,6 +59,49 @@ async function uploadToSupabase(file) {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
+// ✨ 新增: 取得被回覆訊息的圖片 URL
+async function getReplyToImageUrl(client, schemaName, replyToMessageId) {
+  if (!replyToMessageId) {
+    return null;
+  }
+
+  try {
+    const result = await client.query(`
+      SELECT message_type, image_url 
+      FROM ${schemaName}.messages 
+      WHERE message_id = $1
+    `, [replyToMessageId]);
+
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    const originalMsg = result.rows[0];
+    
+    // ✨ 如果是圖片訊息,返回圖片 URL
+    if (originalMsg.message_type === 'image' || 
+        originalMsg.message_type === 'multi_image') {
+      
+      // multi_image 的情況,解析 JSON 取第一張圖
+      if (originalMsg.message_type === 'multi_image' && originalMsg.image_url) {
+        try {
+          const urls = JSON.parse(originalMsg.image_url);
+          return urls[0]; // 返回第一張圖片
+        } catch (e) {
+          return originalMsg.image_url;
+        }
+      }
+      
+      return originalMsg.image_url;
+    }
+
+    return null;
+  } catch (error) {
+    console.error('Error getting reply to image URL:', error);
+    return null;
+  }
+}
+
 // 更新群組對話摘要
 async function updateGroupConversations(client, schemaName, groupId, lastMessage, messageTime) {
   try {
@@ -222,7 +265,7 @@ router.get('/messages', async (req, res) => {
         m.read_at,
         rm.message as reply_to_message,
         rm.sender_account as reply_to_sender,
-        m.image_url as reply_to_image_url,
+        m.reply_to_image_url ,
         ru.description as reply_to_sender_name
       FROM ${schemaName}.messages m
       LEFT JOIN ${schemaName}.messages rm ON m.reply_to_message_id = rm.message_id
@@ -344,15 +387,29 @@ router.post('/messages/send', async (req, res) => {
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const type = messageType || 'text';
     
+     // ✨ 取得被回覆訊息的圖片 URL
+    const replyToImageUrl = await getReplyToImageUrl(client, schemaName, replyToMessageId);   
     // ✅ 插入訊息並立即返回 timestamp
+    console.log('📝 發送訊息:', {
+      messageId,
+      replyToMessageId,
+      replyToImageUrl // ✨ 記錄取得的圖片 URL
+    });
+    
+    // ✅ 插入訊息,包含 reply_to_image_url
     const result = await client.query(`
       INSERT INTO ${schemaName}.messages (
         message_id, sender_account, receiver_account, 
-        message, message_type, reply_to_message_id, timestamp
+        message, message_type, reply_to_message_id, 
+        reply_to_image_url, timestamp
       )
-      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
       RETURNING timestamp
-    `, [messageId, senderAccount, receiverAccount, message, type, replyToMessageId || null]);
+    `, [
+      messageId, senderAccount, receiverAccount, 
+      message, type, replyToMessageId || null,
+      replyToImageUrl // ✨ 新增欄位
+    ]);
     
     const messageTime = result.rows[0].timestamp;
     
@@ -364,7 +421,8 @@ router.post('/messages/send', async (req, res) => {
     res.json({
       success: true,
       messageId: messageId,
-      timestamp: messageTime
+      timestamp: messageTime,
+      replyToImageUrl: replyToImageUrl // ✅ 返回給前端
     });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -435,7 +493,7 @@ router.post(
   '/messages/send-image',
   upload.single('image'),
   async (req, res) => {
-    const { senderAccount, receiverAccount } = req.body;
+    const { senderAccount, receiverAccount, replyToMessageId } = req.body;
     
     if (!senderAccount || !receiverAccount || !req.file) {
       return res.status(400).json({ 
@@ -453,15 +511,22 @@ router.post(
       const imageUrl = await uploadToSupabase(req.file);
       const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-      // ✅ 插入訊息並立即返回 timestamp
+      // ✨ 取得被回覆訊息的圖片 URL
+      const replyToImageUrl = await getReplyToImageUrl(client, schemaName, replyToMessageId);
+      // ✅ 插入訊息
       const result = await client.query(`
         INSERT INTO ${schemaName}.messages (
           message_id, sender_account, receiver_account,
-          message_type, image_url, timestamp
+          message_type, image_url, reply_to_message_id,
+          reply_to_image_url, timestamp
         )
-        VALUES ($1, $2, $3, 'image', $4, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, 'image', $4, $5, $6, CURRENT_TIMESTAMP)
         RETURNING timestamp
-      `, [messageId, senderAccount, receiverAccount, imageUrl]);
+      `, [
+        messageId, senderAccount, receiverAccount, 
+        imageUrl, replyToMessageId || null,
+        replyToImageUrl // ✨ 新增
+      ]);
       
       const messageTime = result.rows[0].timestamp;
 
@@ -479,7 +544,8 @@ router.post(
         success: true,
         messageId: messageId,
         imageUrl: imageUrl,
-        timestamp: messageTime
+        timestamp: messageTime,
+        replyToImageUrl: replyToImageUrl // ✅ 返回
       });
 
     } catch (err) {
@@ -1193,14 +1259,25 @@ router.post('/groups/:groupId/messages/send', async (req, res) => {
     await client.query('BEGIN');
 
     const messageId = generateId('msg');
+   // ✨ 取得被回覆訊息的圖片 URL
+    const replyToImageUrl = await getReplyToImageUrl(client, schemaName, replyToMessageId);
 
-    // ✅ 插入訊息並使用 Server 時間
+
+    console.log('📝 發送群組訊息:', {
+      groupId,
+      messageId,
+      replyToMessageId,
+      replyToImageUrl
+    });
+
+    // ✅ 插入訊息,包含 reply_to_image_url
     const result = await client.query(`
       INSERT INTO ${schemaName}.messages (
         message_id, sender_account, message, message_type,
-        reply_to_message_id, timestamp, group_id, is_group_message
+        reply_to_message_id, reply_to_image_url,
+        timestamp, group_id, is_group_message
       )
-      VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6, true)
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, $7, true)
       RETURNING timestamp
     `, [
       messageId,
@@ -1208,6 +1285,7 @@ router.post('/groups/:groupId/messages/send', async (req, res) => {
       message,
       replyToMessageId ? 'reply' : messageType,
       replyToMessageId,
+      replyToImageUrl, // ✨ 新增
       groupId
     ]);
 
@@ -1222,7 +1300,8 @@ router.post('/groups/:groupId/messages/send', async (req, res) => {
       success: true,
       message: '訊息發送成功',
       messageId,
-      timestamp
+      timestamp,
+      replyToImageUrl // ✅ 返回
     });
 
   } catch (error) {
@@ -1266,14 +1345,18 @@ router.post('/groups/:groupId/messages/send-image', upload.single('image'), asyn
     const messageId = generateId('msg');
     const displayMessage = message || '';
 
-    // ✅ 插入訊息並使用 Server 時間
+    // ✨ 取得被回覆訊息的圖片 URL
+    const replyToImageUrl = await getReplyToImageUrl(client, schemaName, replyToMessageId);
+
+
+    // ✅ 插入訊息
     const result = await client.query(`
       INSERT INTO ${schemaName}.messages (
         message_id, sender_account, message, message_type,
         image_url, thumbnail_url, reply_to_message_id,
-        timestamp, group_id, is_group_message
+        reply_to_image_url, timestamp, group_id, is_group_message
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, $8, true)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, $9, true)
       RETURNING timestamp
     `, [
       messageId,
@@ -1281,8 +1364,9 @@ router.post('/groups/:groupId/messages/send-image', upload.single('image'), asyn
       displayMessage,
       replyToMessageId ? 'reply' : messageType,
       imageUrl,
-      imageUrl, // thumbnail_url 與 imageUrl 相同
+      imageUrl,
       replyToMessageId,
+      replyToImageUrl, // ✨ 新增
       groupId
     ]);
 
@@ -1299,7 +1383,8 @@ router.post('/groups/:groupId/messages/send-image', upload.single('image'), asyn
       messageId,
       imageUrl,
       thumbnailUrl: imageUrl,
-      timestamp
+      timestamp,
+      replyToImageUrl // ✅ 返回
     });
 
   } catch (error) {
@@ -1419,7 +1504,7 @@ router.post(
   '/messages/send-images',
   upload.array('images', 9), // 最多9張圖片
   async (req, res) => {
-    const { senderAccount, receiverAccount, message } = req.body;
+    const { senderAccount, receiverAccount, message, replyToMessageId } = req.body;
     
     if (!senderAccount || !receiverAccount) {
       return res.status(400).json({ 
@@ -1442,7 +1527,10 @@ router.post(
 
       const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const imageCount = req.files.length;
-      
+ 
+      // ✨ 取得被回覆訊息的圖片 URL
+      const replyToImageUrl = await getReplyToImageUrl(client, schemaName, replyToMessageId);     
+
       // 上傳所有圖片到 Supabase
       const imageUrls = [];
       for (let i = 0; i < req.files.length; i++) {
@@ -1450,15 +1538,24 @@ router.post(
         imageUrls.push(imageUrl);
       }
 
-      // 插入訊息
+      // ✅ 插入訊息
       const result = await client.query(`
         INSERT INTO ${schemaName}.messages (
           message_id, sender_account, receiver_account,
-          message, message_type, image_count, timestamp
+          message, message_type, image_url, reply_to_message_id,
+          reply_to_image_url, timestamp
         )
-        VALUES ($1, $2, $3, $4, 'image', $5, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, $4, 'multi_image', $5, $6, $7, CURRENT_TIMESTAMP)
         RETURNING timestamp
-      `, [messageId, senderAccount, receiverAccount, message || '', imageCount]);
+      `, [
+        messageId, 
+        senderAccount, 
+        receiverAccount, 
+        displayMessage,
+        JSON.stringify(imageUrls),
+        replyToMessageId || null,
+        replyToImageUrl // ✨ 新增
+      ]);
       
       const messageTime = result.rows[0].timestamp;
 
@@ -1490,7 +1587,8 @@ router.post(
         messageId: messageId,
         imageUrls: imageUrls,
         imageCount: imageCount,
-        timestamp: messageTime
+        timestamp: messageTime,
+        replyToImageUrl // ✅ 返回
       });
 
     } catch (err) {
@@ -1535,7 +1633,8 @@ router.post(
 
       const messageId = generateId('msg');
       const imageCount = req.files.length;
-      
+        // ✨ 取得被回覆訊息的圖片 URL
+      const replyToImageUrl = await getReplyToImageUrl(client, schemaName, replyToMessageId);    
       // 上傳所有圖片到 Supabase
       const imageUrls = [];
       for (let i = 0; i < req.files.length; i++) {
@@ -1543,23 +1642,23 @@ router.post(
         imageUrls.push(imageUrl);
       }
 
-      // 插入訊息
+      // ✅ 插入訊息
       const result = await client.query(`
         INSERT INTO ${schemaName}.messages (
           message_id, sender_account, message, message_type,
-          reply_to_message_id, timestamp, group_id, 
-          is_group_message, image_count
+          image_url, reply_to_message_id, reply_to_image_url,
+          timestamp, group_id, is_group_message
         )
-        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, $6, true, $7)
+        VALUES ($1, $2, $3, 'multi_image', $4, $5, $6, CURRENT_TIMESTAMP, $7, true)
         RETURNING timestamp
       `, [
         messageId,
         senderAccount,
-        message || '',
-        replyToMessageId ? 'reply' : 'image',
-        replyToMessageId,
-        groupId,
-        imageCount
+        displayMessage,
+        JSON.stringify(imageUrls),
+        replyToMessageId || null,
+        replyToImageUrl, // ✨ 新增
+        groupId
       ]);
 
       const timestamp = result.rows[0].timestamp;
@@ -1587,7 +1686,8 @@ router.post(
         messageId,
         imageUrls,
         imageCount,
-        timestamp
+        timestamp,
+        replyToImageUrl // ✅ 返回
       });
 
     } catch (error) {
