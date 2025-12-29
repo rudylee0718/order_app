@@ -33,7 +33,7 @@ class GroupMessageService {
         m.is_group_message,
         u.description as sender_name,
         rm.message as reply_to_message,
-        rm.image_url AS reply_to_image_url,
+        m.image_url AS reply_to_image_url,
         ru.description as reply_to_sender_name
       FROM ${this.schemaName}.messages m
       JOIN ${this.schemaName}.accounts u ON m.sender_account = u.account
