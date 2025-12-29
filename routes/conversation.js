@@ -210,7 +210,7 @@ router.get('/messages', async (req, res) => {
       SELECT 
         m.message_id,
         m.sender_account,
-        ru.description as sender_name,
+        ou.description as sender_name,
         m.receiver_account,
         m.message,
         m.message_type,
@@ -226,6 +226,7 @@ router.get('/messages', async (req, res) => {
         ru.description as reply_to_sender_name
       FROM ${schemaName}.messages m
       LEFT JOIN ${schemaName}.messages rm ON m.reply_to_message_id = rm.message_id
+      LEFT JOIN app_order.accounts ou ON m.sender_account = ou.account
       LEFT JOIN ${schemaName}.accounts ru ON rm.sender_account = ru.account
       WHERE (m.sender_account = $1 AND m.receiver_account = $2)
          OR (m.sender_account = $2 AND m.receiver_account = $1)
@@ -1652,7 +1653,7 @@ router.get('/messages-with-images', async (req, res) => {
       SELECT 
         m.message_id,
         m.sender_account,
-        ru.descprition as sender_name,
+        ou.description as sender_name,
         m.receiver_account,
         m.message,
         m.message_type,
@@ -1668,6 +1669,7 @@ router.get('/messages-with-images', async (req, res) => {
         ru.description as reply_to_sender_name
       FROM ${schemaName}.messages m
       LEFT JOIN ${schemaName}.messages rm ON m.reply_to_message_id = rm.message_id
+      LEFT JOIN app_order.accounts ou ON m.sender_account = ou.account
       LEFT JOIN ${schemaName}.accounts ru ON rm.sender_account = ru.account
       WHERE (m.sender_account = $1 AND m.receiver_account = $2)
          OR (m.sender_account = $2 AND m.receiver_account = $1)
