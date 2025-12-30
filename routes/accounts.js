@@ -10,18 +10,18 @@ const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 限制 10MB
-  fileFilter: (req, file, cb) => {
-    // 只接受圖片格式
-    const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
+  // fileFilter: (req, file, cb) => {
+  //   // 只接受圖片格式
+  //   const allowedTypes = /jpeg|jpg|png|gif|webp/;
+  //   const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  //   const mimetype = allowedTypes.test(file.mimetype);
 
-    if (mimetype && extname) {
-      return cb(null, true);
-    } else {
-      cb(new Error('只允許上傳圖片格式 (jpeg, jpg, png, gif, webp)'));
-    }
-  }
+  //   if (mimetype && extname) {
+  //     return cb(null, true);
+  //   } else {
+  //     cb(new Error('只允許上傳圖片格式 (jpeg, jpg, png, gif, webp)'));
+  //   }
+  // }
 });
 
 // 上傳到 Supabase Storage 的輔助函式
