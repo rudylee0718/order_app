@@ -2,7 +2,7 @@
 
 const express = require('express');
 const multer = require('multer');
-const supabase = require('../supabase'); // 調整路徑根據你的專案結構
+const supabase = require('./supabase'); // 調整路徑根據你的專案結構
 const path = require('path');
 const router = express.Router();
 
