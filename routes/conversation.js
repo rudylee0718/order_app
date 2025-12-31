@@ -174,7 +174,8 @@ router.get('/conversations/:account', async (req, res) => {
         c.last_message_time,
         c.unread_count,
         c.updated_at,
-        a.description as contact_name
+        a.description as contact_name,
+        a.profile_image_url as contact_avatar  -- ✨ 新增大頭照
       FROM ${schemaName}.conversations c
       LEFT JOIN ${schemaName}.accounts a ON c.contact_account = a.account
       WHERE c.user_account = $1
@@ -214,7 +215,8 @@ router.get('/users/search', async (req, res) => {
       SELECT 
         account,
         description,
-        customer_id
+        customer_id,
+        profile_image_url  -- ✨ 新增大頭照
       FROM ${schemaName}.accounts
       WHERE (account ILIKE $1 OR description ILIKE $1)
         AND account != $2
@@ -228,6 +230,7 @@ router.get('/users/search', async (req, res) => {
         account: row.account,
         accountName: row.description,
         customerId : row.customer_id,
+        profileImageUrl: row.profile_image_url, // ✨ 新增
       }))
     });
   } catch (error) {
@@ -254,6 +257,7 @@ router.get('/messages', async (req, res) => {
         m.message_id,
         m.sender_account,
         ou.description as sender_name,
+        ou.profile_image_url as sender_avatar,  -- ✨ 新增發送者大頭照
         m.receiver_account,
         m.message,
         m.message_type,
@@ -301,6 +305,7 @@ router.get('/messages', async (req, res) => {
         messageId: row.message_id,
         senderAccount: row.sender_account,
         senderName:row.sender_name,
+        senderAvatar: row.sender_avatar, // ✨ 新增
         receiverAccount: row.receiver_account,
         message: row.message,
         messageType: row.message_type,
@@ -898,7 +903,8 @@ router.get('/groups/:groupId/members', async (req, res) => {
         gm.joined_at,
         gm.last_read_message_id,
         u.description as member_name,
-        u.customer_id
+        u.customer_id,
+        u.profile_image_url as member_avatar,  -- ✨ 新增成員大頭照
       FROM ${schemaName}.group_members gm
       JOIN ${schemaName}.accounts u ON gm.user_account = u.account
       WHERE gm.group_id = $1
@@ -1215,6 +1221,7 @@ router.get('/groups/:groupId/messages', async (req, res) => {
         m.group_id,
         m.is_group_message,
         u.description as sender_name,
+        u.profile_image_url as sender_avatar,  -- ✨ 新增發送者大頭照
         rm.message as reply_to_message,
         ru.description as reply_to_sender_name,
         m.reply_to_image_url 
