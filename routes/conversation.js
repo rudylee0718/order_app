@@ -175,7 +175,7 @@ router.get('/conversations/:account', async (req, res) => {
         c.unread_count,
         c.updated_at,
         a.description as contact_name,
-        a.profile_image_url as contact_avatar  -- ✨ 新增大頭照
+        a.profile_image_url as contact_avatar 
       FROM ${schemaName}.conversations c
       LEFT JOIN ${schemaName}.accounts a ON c.contact_account = a.account
       WHERE c.user_account = $1
@@ -257,7 +257,7 @@ router.get('/messages', async (req, res) => {
         m.message_id,
         m.sender_account,
         ou.description as sender_name,
-        ou.profile_image_url as sender_avatar,  -- ✨ 新增發送者大頭照
+        ou.profile_image_url as sender_avatar, 
         m.receiver_account,
         m.message,
         m.message_type,
@@ -904,7 +904,7 @@ router.get('/groups/:groupId/members', async (req, res) => {
         gm.last_read_message_id,
         u.description as member_name,
         u.customer_id,
-        u.profile_image_url as member_avatar,  -- ✨ 新增成員大頭照
+        u.profile_image_url as member_avatar
       FROM ${schemaName}.group_members gm
       JOIN ${schemaName}.accounts u ON gm.user_account = u.account
       WHERE gm.group_id = $1
@@ -1221,7 +1221,7 @@ router.get('/groups/:groupId/messages', async (req, res) => {
         m.group_id,
         m.is_group_message,
         u.description as sender_name,
-        u.profile_image_url as sender_avatar,  -- ✨ 新增發送者大頭照
+        u.profile_image_url as sender_avatar,  
         rm.message as reply_to_message,
         ru.description as reply_to_sender_name,
         m.reply_to_image_url 
