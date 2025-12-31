@@ -823,6 +823,7 @@ router.get('/groups/user/:account', async (req, res) => {
         g.group_id,
         g.group_name,
         g.group_description,
+        g.group_avatar_url,
         g.created_by,
         g.created_at,
         g.updated_at,
@@ -2113,6 +2114,235 @@ router.post(
     }
   }
 );
+
+// ==========================================
+// 群組照片上傳相關 API
+// ==========================================
+
+// 上傳群組大頭照
+router.post('/groups/:groupId/upload-avatar', upload.single('group_avatar'), async (req, res) => {
+  const { groupId } = req.params;
+  const { updatedBy } = req.body; // 執行更新的用戶帳號
+
+  console.log('📸 收到群組大頭照上傳請求:', groupId);
+
+  if (!req.file) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '未上傳圖片' 
+    });
+  }
+
+  if (!updatedBy) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '缺少用戶帳號' 
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // 檢查群組是否存在
+    const groupCheck = await client.query(
+      `SELECT group_id, group_avatar_url, created_by FROM ${schemaName}.chat_groups WHERE group_id = $1`,
+      [groupId]
+    );
+
+    if (groupCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ 
+        success: false, 
+        message: '群組不存在' 
+      });
+    }
+
+    // 檢查用戶是否為群組創建者或管理員
+    const memberCheck = await client.query(
+      `SELECT role FROM ${schemaName}.group_members 
+       WHERE group_id = $1 AND user_account = $2`,
+      [groupId, updatedBy]
+    );
+
+    const isCreator = groupCheck.rows[0].created_by === updatedBy;
+    const isAdmin = memberCheck.rows.length > 0 && memberCheck.rows[0].role === 'admin';
+
+    if (!isCreator && !isAdmin) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ 
+        success: false, 
+        message: '只有創建者或管理員可以更新群組照片' 
+      });
+    }
+
+    const oldAvatarUrl = groupCheck.rows[0].group_avatar_url;
+
+    console.log('✅ 權限驗證通過，開始上傳圖片');
+
+    // 上傳新圖片到 Supabase
+    const avatarUrl = await uploadToSupabase(req.file);
+
+    console.log('✅ 圖片上傳成功:', avatarUrl);
+
+    // 更新資料庫
+    const updateResult = await client.query(`
+      UPDATE ${schemaName}.chat_groups 
+      SET group_avatar_url = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE group_id = $2
+      RETURNING group_id, group_name, group_avatar_url, updated_at
+    `, [avatarUrl, groupId]);
+
+    // 刪除舊圖片（如果存在）
+    if (oldAvatarUrl) {
+      await deleteFromSupabase(oldAvatarUrl);
+    }
+
+    await client.query('COMMIT');
+
+    console.log('✅ 群組大頭照更新成功');
+
+    res.json({
+      success: true,
+      message: '群組照片上傳成功',
+      data: updateResult.rows[0]
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('❌ 上傳群組照片失敗:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '上傳失敗',
+      error: error.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// 刪除群組大頭照
+router.delete('/groups/:groupId/delete-avatar', async (req, res) => {
+  const { groupId } = req.params;
+  const { updatedBy } = req.body;
+
+  if (!updatedBy) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '缺少用戶帳號' 
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    // 檢查群組和權限
+    const groupCheck = await client.query(
+      `SELECT group_id, group_avatar_url, created_by FROM ${schemaName}.chat_groups WHERE group_id = $1`,
+      [groupId]
+    );
+
+    if (groupCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ 
+        success: false, 
+        message: '群組不存在' 
+      });
+    }
+
+    const memberCheck = await client.query(
+      `SELECT role FROM ${schemaName}.group_members 
+       WHERE group_id = $1 AND user_account = $2`,
+      [groupId, updatedBy]
+    );
+
+    const isCreator = groupCheck.rows[0].created_by === updatedBy;
+    const isAdmin = memberCheck.rows.length > 0 && memberCheck.rows[0].role === 'admin';
+
+    if (!isCreator && !isAdmin) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ 
+        success: false, 
+        message: '只有創建者或管理員可以刪除群組照片' 
+      });
+    }
+
+    const avatarUrl = groupCheck.rows[0].group_avatar_url;
+
+    if (!avatarUrl) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        success: false, 
+        message: '群組沒有照片' 
+      });
+    }
+
+    // 從 Supabase 刪除圖片
+    await deleteFromSupabase(avatarUrl);
+
+    // 更新資料庫
+    await client.query(`
+      UPDATE ${schemaName}.chat_groups 
+      SET group_avatar_url = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE group_id = $1
+    `, [groupId]);
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: '群組照片已刪除'
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('❌ 刪除群組照片失敗:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: '刪除失敗',
+      error: error.message 
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ==========================================
+// 輔助函數：從 Supabase 刪除圖片
+// ==========================================
+
+async function deleteFromSupabase(imageUrl) {
+  if (!imageUrl) return;
+
+  try {
+    console.log('🗑️ 準備刪除舊圖片:', imageUrl);
+    const urlParts = imageUrl.split('/');
+    const bucketIndex = urlParts.indexOf('chat-images');
+    
+    if (bucketIndex === -1) {
+      console.log('⚠️ URL 格式不正確，無法刪除');
+      return;
+    }
+
+    const filePath = urlParts.slice(bucketIndex + 1).join('/');
+    console.log('🔍 解析到的檔案路徑:', filePath);
+
+    const { error } = await supabase.storage
+      .from('chat-images')
+      .remove([filePath]);
+
+    if (error) {
+      console.error('❌ 刪除舊圖片失敗:', error);
+    } else {
+      console.log('✅ 舊圖片已刪除');
+    }
+  } catch (err) {
+    console.error('❌ 解析或刪除圖片 URL 失敗:', err);
+  }
+}
 
   // 返回 router 物件
   return router;
