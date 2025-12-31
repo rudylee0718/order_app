@@ -31,7 +31,7 @@ async function uploadProfileImageToSupabase(file, account) {
   const filePath = `profiles/${fileName}`;
 
   const { error } = await supabase.storage
-    .from('chat-images') // 使用你現有的 bucket，或創建新的 'profile-images'
+    .from('profile-images') // 使用你現有的 bucket，或創建新的 'profile-images'
     .upload(filePath, file.buffer, {
       contentType: file.mimetype,
       upsert: false,
@@ -42,7 +42,7 @@ async function uploadProfileImageToSupabase(file, account) {
   }
 
   const { data } = supabase.storage
-    .from('chat-images')
+    .from('profile-images')
     .getPublicUrl(filePath);
 
   return data.publicUrl;
@@ -55,13 +55,13 @@ async function deleteProfileImageFromSupabase(imageUrl) {
   try {
     // 從 URL 中提取檔案路徑
     const urlParts = imageUrl.split('/');
-    const bucketIndex = urlParts.indexOf('chat-images');
+    const bucketIndex = urlParts.indexOf('profile-images');
     if (bucketIndex === -1) return;
 
     const filePath = urlParts.slice(bucketIndex + 1).join('/');
 
     const { error } = await supabase.storage
-      .from('chat-images')
+      .from('profile-images')
       .remove([filePath]);
 
     if (error) {
