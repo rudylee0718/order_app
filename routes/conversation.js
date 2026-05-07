@@ -103,7 +103,7 @@ async function getReplyToImageUrl(client, schemaName, replyToMessageId) {
 }
 
 // 更新群組對話摘要
-async function updateGroupConversations(client, schemaName, groupId, lastMessage, messageTime) {
+async function updateGroupConversations(client, schemaName, groupId, lastMessage, messageTime, senderAccount) {
   try {
     // 取得群組所有成員
     const membersResult = await client.query(
@@ -113,17 +113,23 @@ async function updateGroupConversations(client, schemaName, groupId, lastMessage
 
     // 為每個成員更新或插入對話摘要
     for (const member of membersResult.rows) {
+      // ✅ 判斷當前成員是否為發送者
+      const isSender = member.user_account === senderAccount;
+      
       await client.query(`
         INSERT INTO ${schemaName}.group_conversations (
           conversation_id, group_id, user_account, 
           last_message, last_message_time, unread_count, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, 1, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (group_id, user_account) 
         DO UPDATE SET
           last_message = EXCLUDED.last_message,
           last_message_time = EXCLUDED.last_message_time,
-          unread_count = ${schemaName}.group_conversations.unread_count + 1,
+          unread_count = CASE 
+            WHEN $8 THEN 0 
+            ELSE ${schemaName}.group_conversations.unread_count + 1 
+          END,
           updated_at = EXCLUDED.updated_at
       `, [
         generateId('gconv'),
@@ -131,7 +137,9 @@ async function updateGroupConversations(client, schemaName, groupId, lastMessage
         member.user_account,
         lastMessage.substring(0, 100),
         messageTime,
-        messageTime
+        isSender ? 0 : 1,  // ✅ 發送者初始未讀數為 0，其他為 1
+        messageTime,
+        isSender  // ✅ 用於 UPDATE 時的 CASE 判斷
       ]);
     }
   } catch (error) {
@@ -623,34 +631,144 @@ router.put('/messages/read', async (req, res) => {
   
   try {
     await client.query('BEGIN');
-    
-    await client.query(`
-      UPDATE ${schemaName}.messages
-      SET is_read = TRUE, read_at = $3
-      WHERE receiver_account = $1 
-        AND sender_account = $2 
-        AND is_read = FALSE
-    `, [userAccount, contactAccount, readTime]);
-    
-    await client.query(`
-      UPDATE ${schemaName}.conversations
-      SET unread_count = 0
-      WHERE user_account = $1 
-        AND contact_account = $2
-    `, [userAccount, contactAccount]);
-    
+
+    // ✅ 為每則訊息插入已讀記錄
+    for (const messageId of messageIds) {
+      await client.query(`
+        INSERT INTO ${schemaName}.message_read_status (
+          read_id, 
+          message_id, 
+          user_account, 
+          read_at
+        )
+        VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        ON CONFLICT (message_id, user_account) 
+        DO NOTHING
+      `, [
+        generateId('read'),
+        messageId,
+        userAccount
+      ]);
+    }
+
     await client.query('COMMIT');
-    
-    res.json({ success: true });
+
+    res.json({
+      success: true,
+      message: '已標記為已讀',
+      count: messageIds.length
+    });
+
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error marking messages as read:', error);
-    res.status(500).json({ success: false, error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false, 
+      message: '標記已讀失敗',
+      error: error.message 
+    });
   } finally {
     client.release();
   }
 });
+// GET /api/messages/:messageId/read-by
+router.get('/messages/:messageId/read-by', async (req, res) => {
+  const { messageId } = req.params;
 
+  try {
+    const result = await pool.query(`
+      SELECT 
+        mrs.user_account,
+        mrs.read_at,
+        a.description as user_name,
+        a.profile_image_url as user_avatar
+      FROM ${schemaName}.message_read_status mrs
+      JOIN ${schemaName}.accounts a ON mrs.user_account = a.account
+      WHERE mrs.message_id = $1
+      ORDER BY mrs.read_at ASC
+    `, [messageId]);
+
+    res.json({
+      success: true,
+      readBy: result.rows.map(row => ({
+        userAccount: row.user_account,
+        userName: row.user_name,
+        userAvatar: row.user_avatar,
+        readAt: row.read_at
+      })),
+      readCount: result.rows.length
+    });
+
+  } catch (error) {
+    console.error('Error getting message read status:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
+// GET /api/messages/:messageId/is-read-by/:userAccount
+router.get('/messages/:messageId/is-read-by/:userAccount', async (req, res) => {
+  const { messageId, userAccount } = req.params;
+
+  try {
+    const result = await pool.query(`
+      SELECT EXISTS (
+        SELECT 1 
+        FROM ${schemaName}.message_read_status
+        WHERE message_id = $1 
+          AND user_account = $2
+      ) as is_read
+    `, [messageId, userAccount]);
+
+    res.json({
+      success: true,
+      isRead: result.rows[0].is_read
+    });
+
+  } catch (error) {
+    console.error('Error checking read status:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
+
+
+// GET /api/groups/:groupId/unread-count
+router.get('/groups/:groupId/unread-count', async (req, res) => {
+  const { groupId } = req.params;
+  const { userAccount } = req.query;
+
+  try {
+    const result = await pool.query(`
+      SELECT COUNT(*) as unread_count
+      FROM ${schemaName}.messages m
+      WHERE m.group_id = $1
+        AND m.is_group_message = true
+        AND m.sender_account != $2  -- 排除自己發送的
+        AND NOT EXISTS (
+          SELECT 1 
+          FROM ${schemaName}.message_read_status mrs
+          WHERE mrs.message_id = m.message_id
+            AND mrs.user_account = $2
+        )
+    `, [groupId, userAccount]);
+
+    res.json({
+      success: true,
+      unreadCount: parseInt(result.rows[0].unread_count) || 0
+    });
+
+  } catch (error) {
+    console.error('Error getting unread count:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error' 
+    });
+  }
+});
 // DELETE /api/conversations
 router.delete('/conversations', async (req, res) => {
   const { userAccount, contactAccount } = req.query;
@@ -1228,7 +1346,13 @@ router.get('/groups/:groupId/messages', async (req, res) => {
         rm.message as reply_to_message,
         ru.description as reply_to_sender_name,
         m.reply_to_image_url,
-        ru.profile_image_url as reply_to_sender_avatar 
+        ru.profile_image_url as reply_to_sender_avatar,
+        (
+          SELECT COUNT(DISTINCT mrs.user_account)
+          FROM ${schemaName}.message_read_status mrs
+          WHERE mrs.message_id = m.message_id
+            AND mrs.user_account != m.sender_account
+        ) as read_count 
       FROM ${schemaName}.messages m
       JOIN ${schemaName}.accounts u ON m.sender_account = u.account
       LEFT JOIN ${schemaName}.messages rm ON m.reply_to_message_id = rm.message_id
@@ -1303,7 +1427,7 @@ router.post('/groups/:groupId/messages/send', async (req, res) => {
     const timestamp = result.rows[0].timestamp;
 
     // 更新群組對話摘要
-    await updateGroupConversations(client, schemaName, groupId, message, timestamp);
+    await updateGroupConversations(client, schemaName, groupId, message, timestamp,senderAccount);
 
     await client.query('COMMIT');
 
@@ -1384,7 +1508,7 @@ router.post('/groups/:groupId/messages/send-image', upload.single('image'), asyn
     const timestamp = result.rows[0].timestamp;
 
     // 更新群組對話摘要
-    await updateGroupConversations(client, schemaName, groupId, displayMessage, timestamp);
+    await updateGroupConversations(client, schemaName, groupId, displayMessage, timestamp,senderAccount);
 
     await client.query('COMMIT');
 
@@ -1423,13 +1547,48 @@ router.put('/groups/:groupId/messages/read', async (req, res) => {
     });
   }
 
+  const client = await pool.connect();
+
   try {
-    // ✅ 使用 CURRENT_TIMESTAMP
-    await pool.query(`
-      UPDATE ${schemaName}.group_conversations
-      SET unread_count = 0, updated_at = CURRENT_TIMESTAMP
-      WHERE group_id = $1 AND user_account = $2
+    await client.query('BEGIN');
+
+    // ✅ 批次插入已讀記錄（使用 ON CONFLICT 避免重複）
+    await client.query(`
+      INSERT INTO ${schemaName}.message_read_status (
+        read_id, 
+        message_id, 
+        user_account, 
+        read_at
+      )
+      SELECT 
+        CONCAT('read_', m.message_id, '_', $2) as read_id,
+        m.message_id,
+        $2 as user_account,
+        CURRENT_TIMESTAMP
+      FROM ${schemaName}.messages m
+      WHERE m.group_id = $1 
+        AND m.is_group_message = true
+        AND m.sender_account != $2  -- ✅ 排除自己發送的訊息
+        AND NOT EXISTS (
+          -- ✅ 避免重複插入
+          SELECT 1 FROM ${schemaName}.message_read_status mrs
+          WHERE mrs.message_id = m.message_id 
+            AND mrs.user_account = $2
+        )
+      ON CONFLICT (message_id, user_account) 
+      DO NOTHING
     `, [groupId, userAccount]);
+
+    // ✅ 更新 group_conversations 的未讀數
+    await client.query(`
+      UPDATE ${schemaName}.group_conversations
+      SET unread_count = 0, 
+          updated_at = CURRENT_TIMESTAMP
+      WHERE group_id = $1 
+        AND user_account = $2
+    `, [groupId, userAccount]);
+
+    await client.query('COMMIT');
 
     res.json({
       success: true,
@@ -1437,12 +1596,15 @@ router.put('/groups/:groupId/messages/read', async (req, res) => {
     });
 
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Error marking group messages as read:', error);
     res.status(500).json({ 
       success: false, 
       message: '標記已讀失敗',
       error: error.message 
     });
+  } finally {
+    client.release();
   }
 });
 
@@ -1937,6 +2099,198 @@ router.get('/groups/:groupId/messages-with-images', async (req, res) => {
     });
   }
 });
+/**
+ * GET /api/messages/unread-count/:userAccount
+ * 獲取用戶的未讀訊息總數（個人對話 + 群組對話）
+ */
+router.get('/messages/unread-count/:userAccount', async (req, res) => {
+  const { userAccount } = req.params;
+  
+  try {
+    // 1. 獲取個人對話未讀數
+    const personalResult = await pool.query(`
+      SELECT COALESCE(SUM(unread_count), 0) as count
+      FROM ${schemaName}.conversations
+      WHERE user_account = $1
+    `, [userAccount]);
+    
+    const personalUnread = parseInt(personalResult.rows[0]?.count) || 0;
+    
+    // 2. 獲取群組對話未讀數
+    const groupResult = await pool.query(`
+      SELECT COALESCE(SUM(unread_count), 0) as count
+      FROM ${schemaName}.group_conversations
+      WHERE user_account = $1
+    `, [userAccount]);
+    
+    const groupUnread = parseInt(groupResult.rows[0]?.count) || 0;
+    
+    // 3. 計算總未讀數
+    const totalUnread = personalUnread + groupUnread;
+    
+    // console.log(`📊 未讀訊息數 [${userAccount}]:`, {
+    //   personal: personalUnread,
+    //   group: groupUnread,
+    //   total: totalUnread
+    // });
+    
+    res.json({
+      success: true,
+      unreadCount: totalUnread,
+      details: {
+        personal: personalUnread,
+        group: groupUnread
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error getting unread count:', error);
+    res.status(500).json({
+      success: false,
+      message: '獲取未讀訊息數失敗',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/messages/mark-read
+ * 標記個人對話訊息為已讀
+ */
+router.post('/messages/mark-read', async (req, res) => {
+  const { senderAccount, receiverAccount } = req.body;
+  
+  if (!senderAccount || !receiverAccount) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '缺少必要參數' 
+    });
+  }
+  
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    // 標記訊息為已讀
+    const updateResult = await client.query(`
+      UPDATE ${schemaName}.messages
+      SET is_read = TRUE, read_at = CURRENT_TIMESTAMP
+      WHERE sender_account = $1
+        AND receiver_account = $2
+        AND is_read = FALSE
+    `, [senderAccount, receiverAccount]);
+    
+    // 清除未讀數量
+    await client.query(`
+      UPDATE ${schemaName}.conversations
+      SET unread_count = 0, updated_at = CURRENT_TIMESTAMP
+      WHERE user_account = $1 
+        AND contact_account = $2
+    `, [receiverAccount, senderAccount]);
+    
+    await client.query('COMMIT');
+    
+    console.log(`✅ 標記已讀: ${receiverAccount} ← ${senderAccount}, 更新 ${updateResult.rowCount} 則訊息`);
+    
+    res.json({
+      success: true,
+      message: '訊息已標記為已讀',
+      updatedCount: updateResult.rowCount
+    });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error marking messages as read:', error);
+    res.status(500).json({
+      success: false,
+      message: '標記已讀失敗',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+});
+
+/**
+ * POST /api/groups/:groupId/messages/mark-read
+ * 標記群組對話訊息為已讀
+ */
+router.post('/groups/:groupId/messages/mark-read', async (req, res) => {
+  const { groupId } = req.params;
+  const { userAccount } = req.body;
+  
+  if (!userAccount) {
+    return res.status(400).json({ 
+      success: false, 
+      message: '缺少用戶帳號' 
+    });
+  }
+  
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    // 批次插入已讀記錄
+    const insertResult = await client.query(`
+      INSERT INTO ${schemaName}.message_read_status (
+        read_id, 
+        message_id, 
+        user_account, 
+        read_at
+      )
+      SELECT 
+        CONCAT('read_', m.message_id, '_', $2::text) as read_id,
+        m.message_id,
+        $2::text as user_account,
+        CURRENT_TIMESTAMP
+      FROM ${schemaName}.messages m
+      WHERE m.group_id = $1 
+        AND m.is_group_message = true
+        AND m.sender_account != $2::text
+        AND NOT EXISTS (
+          SELECT 1 FROM ${schemaName}.message_read_status mrs
+          WHERE mrs.message_id = m.message_id 
+            AND mrs.user_account = $2::text
+        )
+      ON CONFLICT (message_id, user_account) 
+      DO NOTHING
+    `, [groupId, userAccount]);
+    
+    // 更新群組對話未讀數
+    await client.query(`
+      UPDATE ${schemaName}.group_conversations
+      SET unread_count = 0, 
+          updated_at = CURRENT_TIMESTAMP
+      WHERE group_id = $1 
+        AND user_account = $2
+    `, [groupId, userAccount]);
+    
+    await client.query('COMMIT');
+    
+    console.log(`✅ 群組已讀: 群組 ${groupId}, 用戶 ${userAccount}, 標記 ${insertResult.rowCount} 則訊息`);
+    
+    res.json({
+      success: true,
+      message: '群組訊息已標記為已讀',
+      markedCount: insertResult.rowCount
+    });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error marking group messages as read:', error);
+    res.status(500).json({
+      success: false,
+      message: '標記群組訊息已讀失敗',
+      error: error.message
+    });
+  } finally {
+    client.release();
+  }
+});
+
+
 // ==================== 多張圖片上傳 API ====================
 
 // 個人訊息 - 發送多張圖片
@@ -1975,7 +2329,8 @@ router.post(
       console.log('✅ 所有圖片上傳成功:', imageUrls.length);
 
       const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const displayMessage = message || `[${imageUrls.length} 張圖片]`;
+      // const displayMessage = message || `[${imageUrls.length} 張圖片]`;
+      const displayMessage = message || '';
 
       // ✅ 插入訊息,將圖片 URLs 儲存為 JSON 陣列
       const result = await client.query(`
@@ -2001,7 +2356,8 @@ router.post(
         senderAccount,
         receiverAccount,
         displayMessage,
-        messageTime
+        messageTime,
+        senderAccount
       );
 
       await client.query('COMMIT');

@@ -1,103 +1,10 @@
-// // server.js
-
-// // 引入所需的模組
-// const express = require('express');
-// const cors = require('cors'); // 引入 cors 套件
-// const { Pool  } = require('pg');
-// const dotenv = require('dotenv');
-
-// // 加載 .env 檔案中的環境變數
-// dotenv.config();
-
-// // 建立 Express 應用程式
-// const app = express();
-// const port = process.env.PORT || 3000;
-// // 啟用 CORS，允許所有來源的請求
-// app.use(cors());
-
-// // 啟用 Express 內建的 body-parser，用來解析 JSON 請求
-// app.use(express.json());
-
-// // PostgreSQL 連線設定，從環境變數中讀取
-// const pool = new Pool ({
-//   user: process.env.DB_USER,
-//   host: process.env.DB_HOST,
-//   database: process.env.DB_DATABASE,
-//   password: process.env.DB_PASSWORD,
-//   port: process.env.DB_PORT,
-//   ssl: {
-//     rejectUnauthorized: false // 這對於 Render 的連線可能是必要的
-//   }
-// });
-
-
-// //專案的 schema 名稱
-// const schemaName = 'app_order';
-// const schemaName1 = 'process_schedule';
-
-// /**
-//  * 連接到資料庫
-//  */
-// async function connectToDatabase() {
-//   try {
-//     await pool.connect();
-//     console.log('成功連接到 PostgreSQL 資料庫！');
-//   } catch (err) {
-//     console.error('資料庫連線失敗：', err.stack);
-//   }
-// }
-
-// // 呼叫函式以連接資料庫
-// connectToDatabase();
-
-// // 引入客戶和帳號的路由模組
-// const customersRouter = require('./routes/customers')(pool, schemaName);
-// const accountsRouter = require('./routes/accounts')(pool, schemaName);
-// const loginRouter = require('./routes/login')(pool, schemaName);
-// const loadUi=require('./routes/load_ui')(pool, schemaName);
-// const ordersRouter=require('./routes/orders')(pool, schemaName);
-// const scheduleRouter=require('./routes/schedule')(pool, schemaName1);
-// const conversationRouter=require('./routes/conversation')(pool, schemaName);
-
-// // 將路由掛載到主應用程式上
-// app.use('/api/customers', customersRouter);
-// app.use('/api/accounts', accountsRouter);
-// app.use('/api/login', loginRouter);
-// app.use('/api', loadUi);
-// app.use('/api', ordersRouter);
-// app.use('/api/schedule', scheduleRouter);
-// app.use('/api', conversationRouter);
-
-
-
-// // 定義一個測試用的 API 端點
-// app.get('/api/status', async (req, res) => {
-//   try {
-//     const result = await pool.query('SELECT NOW()');
-//     res.json({
-//       status: 'OK',
-//       message: '後端伺服器運行正常，並已連接到資料庫。',
-//       currentTime: result.rows[0].now
-//     });
-//   } catch (err) {
-//     console.error('API 狀態檢查失敗：', err.stack);
-//     res.status(500).json({ status: 'Error', message: '無法連接到資料庫' });
-//   }
-// });
-
-
-
-// // 啟動伺服器
-// app.listen(port, () => {
-//   console.log(`伺服器正在運行於 http://localhost:${port}`);
-// });
-// server.js
 
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const { pool, testConnection, closePool } = require('./config/database');
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
+
 
 // 加載環境變數
 dotenv.config();
@@ -132,20 +39,46 @@ const schemaName1 = process.env.SCHEMA_NAME_1 || 'process_schedule';
 // 引入路由模組
 const customersRouter = require('./routes/customers')(pool, schemaName);
 const accountsRouter = require('./routes/accounts')(pool, schemaName);
+const rolesRouter = require('./routes/roles')(pool, schemaName);
+const accountRolesRouter = require('./routes/account-roles')(pool, schemaName);
 const loginRouter = require('./routes/login')(pool, schemaName);
 const loadUiRouter = require('./routes/load_ui')(pool, schemaName);
 const ordersRouter = require('./routes/orders')(pool, schemaName);
 const scheduleRouter = require('./routes/schedule')(pool, schemaName1);
 const conversationRouter = require('./routes/conversation')(pool, schemaName);
+const productsRouter = require('./routes/products')(pool, schemaName);
+const areasRouter = require('./routes/areas')(pool, schemaName);
+const purchasePricesRouter = require('./routes/purchase-prices')(pool, schemaName);
+const salesPricesRouter = require('./routes/sales-prices')(pool, schemaName);
+const productsGradeRouter = require('./routes/products-grade')(pool, schemaName);
+const customerLevelsRouter = require('./routes/customer-levels')(pool, schemaName);
+const aiRouter = require('./routes/ai')(pool, schemaName);
+const erpOrders = require('./routes/erp-orders')(pool, schemaName);
+const purchaseRequest = require('./routes/purchase-requests')(pool, schemaName);
+const cartRouter = require('./routes/cart')(pool, schemaName);
+const quizRouter = require('./routes/quiz')(pool, schemaName);
 
 // 掛載路由
 app.use('/api/customers', customersRouter);
 app.use('/api/accounts', accountsRouter);
+app.use('/api/roles', rolesRouter);
+app.use('/api/account-roles', accountRolesRouter);
 app.use('/api/login', loginRouter);
 app.use('/api', loadUiRouter);
 app.use('/api', ordersRouter);
 app.use('/api/schedule', scheduleRouter);
 app.use('/api', conversationRouter);
+app.use('/api/products', productsRouter);
+app.use('/api/areas', areasRouter);
+app.use('/api/purchase-prices', purchasePricesRouter);
+app.use('/api/sales-prices', salesPricesRouter);
+app.use('/api/products-grade', productsGradeRouter);
+app.use('/api/customer-levels', customerLevelsRouter);
+app.use('/api/ai', aiRouter);
+app.use('/api/erp-orders', erpOrders);
+app.use('/api/purchase-requests', purchaseRequest);
+app.use('/api/cart', cartRouter);
+app.use('/api/quiz', quizRouter);
 
 // ==================== 健康檢查端點 ====================
 
@@ -199,6 +132,9 @@ async function startServer() {
       console.error('❌ 無法連接到資料庫,伺服器啟動失敗');
       process.exit(1);
     }
+
+
+
 
     // 啟動伺服器
     const server = app.listen(port, () => {
