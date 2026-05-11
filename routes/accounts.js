@@ -330,6 +330,7 @@ module.exports = (pool, schemaName) => {
             a.description,
             a.email,
             a.phone,
+            a.balance,
             a.status,
             a.remark,
             a.profile_image_url,
@@ -680,6 +681,90 @@ router.get('/:account', async (req, res) => {
   }
 });
 
+
+ // ══════════════════════════════════════════════
+  // 調整帳號餘額
+  // PATCH /api/accounts/web/:account/balance
+  // Body: { type: 'add'|'subtract'|'set', amount: number, note?: string }
+  //   add      → new_balance = current + amount
+  //   subtract → new_balance = current - amount
+  //   set      → new_balance = amount
+  // 權限：users:accounts:update
+  // ══════════════════════════════════════════════
+  router.patch('/web/:account/balance',
+    authenticateToken,
+    requirePermission('users:accounts:update'),
+    async (req, res) => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+ 
+        const { account }          = req.params;
+        const { type, amount, note } = req.body;
+ 
+        // ── 基本驗證 ──
+        if (!['add', 'subtract', 'set'].includes(type)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            status: 'Error',
+            message: 'type 必須為 add、subtract 或 set'
+          });
+        }
+        const amt = parseFloat(amount);
+        if (isNaN(amt) || amt < 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ status: 'Error', message: '金額必須為非負數' });
+        }
+ 
+        // ── 確認帳號存在，取得目前餘額 ──
+        const chk = await client.query(
+          `SELECT account, balance FROM ${schemaName}.accounts WHERE account = $1`,
+          [account]
+        );
+        if (chk.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ status: 'Error', message: '帳號不存在' });
+        }
+ 
+        const currentBalance = parseFloat(chk.rows[0].balance) || 0;
+ 
+        let newBalance;
+        if (type === 'add')      newBalance = currentBalance + amt;
+        else if (type === 'subtract') newBalance = currentBalance - amt;
+        else                     newBalance = amt;   // set
+ 
+        // ── 更新餘額 ──
+        const updResult = await client.query(`
+          UPDATE ${schemaName}.accounts
+          SET balance    = $1,
+              updated_at = CURRENT_TIMESTAMP,
+              updated_by = $2
+          WHERE account = $3
+          RETURNING account, balance
+        `, [newBalance, req.user.account, account]);
+ 
+        await client.query('COMMIT');
+ 
+        res.json({
+          status:          'Success',
+          message:         '餘額調整成功',
+          account,
+          previous_balance: currentBalance,
+          new_balance:      parseFloat(updResult.rows[0].balance),
+          type,
+          amount:           amt,
+          note:             note || null,
+          adjusted_by:      req.user.account,
+        });
+      } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('❌ 調整餘額失敗:', err);
+        res.status(500).json({ status: 'Error', message: '調整餘額失敗', error: err.message });
+      } finally {
+        client.release();
+      }
+    }
+  );
 
   // 返回 router 物件
   return router;

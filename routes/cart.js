@@ -243,14 +243,26 @@ module.exports = (pool, schemaName) => {
   });
 
   // ==================== POST /api/cart/checkout ====================
+  // 支援兩種模式：
+  //   1. 購物車結帳：item_ids 有值 → 扣餘額 + 刪除購物車項目
+  //   2. 直接購買：item_ids 為空陣列 → 只扣餘額，不刪購物車
   router.post('/checkout', async (req, res) => {
     const account = getAccount(req);
     if (!account) return res.status(401).json({ status: 'Error', message: '請先登入' });
 
     const { item_ids, total_amount } = req.body;
-    if (!item_ids || !Array.isArray(item_ids) || item_ids.length === 0 || total_amount == null) {
-      return res.status(400).json({ status: 'Error', message: '請提供結帳項目與金額' });
+
+    // total_amount 必須有值且大於 0
+    if (total_amount == null || total_amount <= 0) {
+      return res.status(400).json({ status: 'Error', message: '請提供有效的結帳金額' });
     }
+
+    // item_ids 允許為空陣列（直接購買場景），但必須是陣列型別
+    if (item_ids !== undefined && !Array.isArray(item_ids)) {
+      return res.status(400).json({ status: 'Error', message: 'item_ids 格式錯誤' });
+    }
+
+    const isDirectBuy = !item_ids || item_ids.length === 0;
 
     const client = await pool.connect();
     try {
@@ -280,11 +292,13 @@ module.exports = (pool, schemaName) => {
         [total_amount, account]
       );
 
-      // 刪除購物車項目
-      await client.query(
-        `DELETE FROM ${schemaName}.cart_items WHERE id = ANY($1::int[]) AND account = $2`,
-        [item_ids, account]
-      );
+      // 僅購物車結帳才刪除購物車項目
+      if (!isDirectBuy) {
+        await client.query(
+          `DELETE FROM ${schemaName}.cart_items WHERE id = ANY($1::int[]) AND account = $2`,
+          [item_ids, account]
+        );
+      }
 
       await client.query('COMMIT');
 
@@ -296,7 +310,10 @@ module.exports = (pool, schemaName) => {
       res.json({
         status: 'Success',
         message: '結帳成功',
-        data: { new_balance: parseFloat(newBalResult.rows[0].balance) }
+        data: {
+          new_balance: parseFloat(newBalResult.rows[0].balance),
+          is_direct_buy: isDirectBuy,  // 讓前端知道是哪種模式
+        }
       });
     } catch (err) {
       await client.query('ROLLBACK');
